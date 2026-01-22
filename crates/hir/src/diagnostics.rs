@@ -355,32 +355,46 @@ pub(crate) fn any_diag_from_infer_diagnostic(
             name: name.clone(),
             range: *range,
         },
-        InferenceDiagnostic::UnexpectedTemplateArgument { expression } => {
-            let pointer = source_map.expression_to_source(*expression).ok()?.clone();
-            let source = InFile::new(file_id, pointer);
-            AnyDiagnostic::UnexpectedTemplateArgument { expression: source }
+        InferenceDiagnostic::UnexpectedTemplateArgument { source, expression } => {
+            let map = match source {
+                ExpressionStoreSource::Body => source_map,
+                ExpressionStoreSource::Signature => signature_map,
+            };
+            let pointer = map.expression_to_source(*expression).ok()?.clone();
+            let in_file = InFile::new(file_id, pointer);
+            AnyDiagnostic::UnexpectedTemplateArgument { expression: in_file }
         },
         InferenceDiagnostic::WgslError {
+            source,
             expression,
             message,
         } => {
-            let pointer = source_map.expression_to_source(*expression).ok()?.clone();
-            let source = InFile::new(file_id, pointer);
+            let map = match source {
+                ExpressionStoreSource::Body => source_map,
+                ExpressionStoreSource::Signature => signature_map,
+            };
+            let pointer = map.expression_to_source(*expression).ok()?.clone();
+            let in_file = InFile::new(file_id, pointer);
             AnyDiagnostic::WgslError {
-                expression: source,
+                expression: in_file,
                 message: message.clone(),
             }
         },
         InferenceDiagnostic::ExpectedLoweredKind {
+            source,
             expression,
             expected,
             actual,
             path,
         } => {
-            let pointer = source_map.expression_to_source(*expression).ok()?.clone();
-            let source = InFile::new(file_id, pointer);
+            let map = match source {
+                ExpressionStoreSource::Body => source_map,
+                ExpressionStoreSource::Signature => signature_map,
+            };
+            let pointer = map.expression_to_source(*expression).ok()?.clone();
+            let in_file = InFile::new(file_id, pointer);
             AnyDiagnostic::ExpectedLoweredKind {
-                expression: source,
+                expression: in_file,
                 path: path.clone(),
                 expected: *expected,
                 actual: *actual,

@@ -266,13 +266,16 @@ pub enum InferenceDiagnostic {
         range: base_db::TextRange,
     },
     UnexpectedTemplateArgument {
+        source: ExpressionStoreSource,
         expression: ExpressionId,
     },
     WgslError {
+        source: ExpressionStoreSource,
         expression: ExpressionId,
         message: String,
     },
     ExpectedLoweredKind {
+        source: ExpressionStoreSource,
         expression: ExpressionId,
         expected: LoweredKind,
         actual: LoweredKind,
@@ -519,6 +522,7 @@ impl<'database> InferenceContext<'database> {
         if address_space == AddressSpace::Function {
             // Function address space is not allowed at the module level
             self.push_diagnostic(InferenceDiagnostic::UnexpectedTemplateArgument {
+                source: variable.store.store_source,
                 expression: variable.template_parameters[0],
             });
         }
@@ -553,6 +557,7 @@ impl<'database> InferenceContext<'database> {
             None => default_address_space,
             _ => {
                 self.push_diagnostic(InferenceDiagnostic::UnexpectedTemplateArgument {
+                    source: store.store_source,
                     expression: template[0],
                 });
                 default_address_space
@@ -565,6 +570,7 @@ impl<'database> InferenceContext<'database> {
                 } else {
                     // Only the storage address space allows for an access mode
                     self.push_diagnostic(InferenceDiagnostic::UnexpectedTemplateArgument {
+                        source: store.store_source,
                         expression: template[0],
                     });
                     address_space.default_access_mode()
@@ -573,6 +579,7 @@ impl<'database> InferenceContext<'database> {
             None => address_space.default_access_mode(),
             _ => {
                 self.push_diagnostic(InferenceDiagnostic::UnexpectedTemplateArgument {
+                    source: store.store_source,
                     expression: template[0],
                 });
                 address_space.default_access_mode()
@@ -583,6 +590,7 @@ impl<'database> InferenceContext<'database> {
         if template.len() > 2 {
             for expression in &template[2..] {
                 self.push_diagnostic(InferenceDiagnostic::UnexpectedTemplateArgument {
+                    source: store.store_source,
                     expression: *expression,
                 });
             }
@@ -733,6 +741,7 @@ impl<'database> InferenceContext<'database> {
                 if address_space != AddressSpace::Function {
                     // Only function address space is allowed
                     self.push_diagnostic(InferenceDiagnostic::UnexpectedTemplateArgument {
+                        source: body.store_source,
                         expression: template_parameters[0],
                     });
                 }
@@ -1400,6 +1409,7 @@ impl<'database> InferenceContext<'database> {
             | Lowered::BuiltinFunction
             | Lowered::Enumerant(_) => {
                 self.push_diagnostic(InferenceDiagnostic::ExpectedLoweredKind {
+                    source: store.store_source,
                     expression,
                     expected: LoweredKind::Variable,
                     actual: lowered.kind(),
@@ -1615,7 +1625,13 @@ impl<'database> InferenceContext<'database> {
                     &callee.template_parameters,
                 );
                 self.push_lowering_diagnostics(&mut context.diagnostics, store);
-                self.call_builtin_function(expression, callee, template_args, &arguments)
+                self.call_builtin_function(
+                    expression,
+                    callee,
+                    template_args,
+                    &arguments,
+                    store.store_source,
+                )
             },
             Lowered::Enumerant(_)
             | Lowered::GlobalConstant(_)
@@ -1623,6 +1639,7 @@ impl<'database> InferenceContext<'database> {
             | Lowered::Override(_)
             | Lowered::Local(_) => {
                 self.push_diagnostic(InferenceDiagnostic::ExpectedLoweredKind {
+                    source: store.store_source,
                     expression,
                     expected: LoweredKind::Function,
                     actual: lowered.kind(),
@@ -1639,9 +1656,11 @@ impl<'database> InferenceContext<'database> {
         callee: &IdentExpression,
         mut template_parameters: TemplateParameters,
         arguments: &[Type],
+        store_source: ExpressionStoreSource,
     ) -> Type {
         let Some(name) = callee.path.mod_path().as_ident() else {
             self.push_diagnostic(InferenceDiagnostic::WgslError {
+                source: store_source,
                 expression,
                 message: format!("invalid builtin {}", callee.path.mod_path()),
             });
@@ -1657,6 +1676,7 @@ impl<'database> InferenceContext<'database> {
                 template_args.push(template_parameter);
             } else {
                 self.push_diagnostic(InferenceDiagnostic::WgslError {
+                    source: store_source,
                     expression,
                     message:
                         "internal error: wgsl-types did not align with wgsl-analyzer's type system"
@@ -1692,6 +1712,7 @@ impl<'database> InferenceContext<'database> {
             Ok(None) => self.error_type(),
             Err(error) => {
                 self.push_diagnostic(InferenceDiagnostic::WgslError {
+                    source: store_source,
                     expression,
                     message: error.to_string(),
                 });

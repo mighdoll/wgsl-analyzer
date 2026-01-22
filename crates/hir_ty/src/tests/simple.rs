@@ -143,6 +143,24 @@ fn var_array() {
     );
 }
 
+/// Tests that errors in global variable signatures are properly reported.
+/// This test triggers UnexpectedTemplateArgument from a signature context.
+/// The diagnostic includes `source: Signature` to ensure correct source mapping.
+#[test]
+fn global_var_function_address_space_error() {
+    check_infer(
+        "
+        var<function> bad_global: u32;
+        ",
+        // This should produce an UnexpectedTemplateArgument diagnostic
+        // because function address space is not allowed at module level
+        expect![[r#"
+            23..33 'bad_global': ref<u32>
+            UnexpectedTemplateArgument { source: Signature, expression: Idx::<Expression>(0) }
+        "#]],
+    );
+}
+
 #[test]
 fn break_if_bool() {
     check_infer(
