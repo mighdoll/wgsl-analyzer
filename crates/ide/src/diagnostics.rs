@@ -655,3 +655,76 @@ fn error_message_cause_chain(error: &dyn error::Error) -> String {
 
     message
 }
+
+#[cfg(test)]
+mod tests {
+    use expect_test::{Expect, expect};
+    use hir::diagnostics::DiagnosticsConfig;
+
+    use crate::fixture::single_file_db;
+
+    fn check_diagnostics(source: &str, expected: Expect) {
+        let (analysis, file_id) = single_file_db(source);
+        let config = DiagnosticsConfig {
+            enabled: true,
+            type_errors: true,
+            naga_parsing_errors: false,
+            naga_validation_errors: false,
+            ..Default::default()
+        };
+        let diagnostics = analysis.diagnostics(&config, file_id).unwrap();
+        let actual: Vec<_> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+        expected.assert_debug_eq(&actual);
+    }
+
+    #[test]
+    fn signature_error_not_dropped() {
+        // Error in signature context - verifies conversion works for signature expressions.
+        // The UnexpectedTemplateArgument was previously silently dropped.
+        check_diagnostics(
+            "var<function> x: u32;",
+            expect![[r#"
+                [
+                    "address space is only valid in function-scope",
+                    "unexpected template argument",
+                ]
+            "#]],
+        );
+    }
+
+    #[test]
+    fn body_error_still_works() {
+        // Regression test - body errors should still work
+        check_diagnostics(
+            "fn f() { let x: u32 = 1.0; }",
+            expect![[r#"
+                [
+                    "expected u32, found float",
+                ]
+            "#]],
+        );
+    }
+
+    #[test]
+    fn no_errors_for_valid_code() {
+        check_diagnostics(
+            "fn f() { let x: u32 = 1u; }",
+            expect![[r#"
+                []
+            "#]],
+        );
+    }
+
+    #[test]
+    fn signature_type_error() {
+        // Error in function parameter type - another signature context
+        check_diagnostics(
+            "fn f(x: nonexistent_type) {}",
+            expect![[r#"
+                [
+                    "`nonexistent_type` not found in scope",
+                ]
+            "#]],
+        );
+    }
+}
