@@ -212,6 +212,11 @@ attribute:
 			| 'fragment' @fragment_attr
 			| 'compute' @compute_attr
 			| 'early_depth_test' '(' early_depth_test_mode ')' @early_depth_test_attr
+			// WESL conditional translation (wesl-spec): `@if` / `@else` use the `if`/`else`
+			// keyword tokens, so they need explicit branches. `@elif` is an identifier and
+			// is handled by the generic `Identifier` branch below as an OtherAttribute.
+			| 'if' '(' expression [','] ')' @if_attr
+			| 'else' @else_attr
 			| Identifier [ argument_expression_list ] @other_attr
 	)
 ;
@@ -302,15 +307,53 @@ argument_expression_list: '(' [expression (?1 ',' expression)* [',']] ')' @argum
 // extra rule for better error handling
 argument_expression_list_expr: '(' [expression (?1 ',' expression)* [',']] ')' @arguments;
 
+// WESL conditional translation (wesl-spec#191): the choice is split on attribute presence.
+//
+// The ATTRIBUTED branch (`attribute+ ...`) is restricted: its assignment uses
+// `lhs_expression_no_paren` (FIRST excludes `(`), so a statement carrying an attribute can
+// never be a parenthesized-LHS assignment. This removes the ambiguity between an attribute's
+// argument list `@attr(x)` and a following `(x) = ...`: the `(` always binds to the attribute.
+//
+// The BARE branch (no attribute) is unrestricted and uses the full `lhs_expression`, so every
+// valid WGSL statement — including `(p) = 3`, `*(p) = 3`, `&(p) = 3` — still parses.
+//
+// The two branches are told apart purely by FIRST set (`@` vs. everything else), so this stays
+// LL(1) with no semantic predicate. The statement bodies are duplicated (rather than factored
+// into a shared rule) because an attribute must attach inside the relabeled statement node,
+// which only happens when `attribute+` and the `@node` markers live in the same rule.
 statement:
-	attribute* (
-		// NOTE: The WGSL spec (§9.4.1) requires `if_clause (else_if_clause)* [else_clause]`,
-		// i.e. at most one trailing else and no else-if after else. We accept the more
-		// permissive form here so the parser produces a valid AST for malformed input
-		// (e.g. `if { } else { } else if (...) { }`), enabling the formatter and IDE
-		// features to operate on it.
-		// A parser-level diagnostic in `create_node_if_statement` reports the error.
+	attribute+ (
 		if_clause (?1 else_if_clause | else_clause)* @if_statement // §9.4.1
+		| 'switch' expression switch_body @switch_statement // §9.4.2
+		| 'loop' loop_compound_statement @loop_statement // §9.4.3
+		| 'for' '(' [for_init] ';' [for_condition] ';' [for_update] ')' compound_statement @for_statement // §9.4.4
+		| 'while' expression compound_statement @while_statement // §9.4.5
+		| '{' statement* '}' @compound_statement // §9.1
+		| ?2 function_call ';' @function_call_statement // §9.5
+		| variable_declaration_semi @variable_declaration
+		| let_declaration_semi @let_declaration
+		| const_declaration_semi @const_declaration
+		| lhs_expression_no_paren @simple_assignment_statement (
+			'=' expression @simple_assignment_statement // §9.2.1
+			| compound_assignment_operator expression @compound_assignment_statement // §9.2.3
+			| '++' @increment_statement // §9.3
+			| '--' @decrement_statement // §9.3
+		) ';'
+		| '_' '=' expression ';' @phony_assignment_statement // §9.2.2
+		| 'const_assert' expression ';' @assert_statement // §10.1
+		| 'break' ';' @break_statement // §9.4.6
+		| 'continue' ';' @continue_statement // §9.4.8
+		| ';' @empty_statement
+		| 'discard' ';' @discard_statement // §9.4.11
+		| 'return' [expression] ';' @return_statement // §9.4.10
+	)
+	// NOTE: The WGSL spec (§9.4.1) requires `if_clause (else_if_clause)* [else_clause]`,
+	// i.e. at most one trailing else and no else-if after else. We accept the more
+	// permissive form here so the parser produces a valid AST for malformed input
+	// (e.g. `if { } else { } else if (...) { }`), enabling the formatter and IDE
+	// features to operate on it.
+	// A parser-level diagnostic in `create_node_if_statement` reports the error.
+	| if_clause (?3 else_if_clause | else_clause)* @if_statement // §9.4.1
 	| 'switch' expression switch_body @switch_statement // §9.4.2
 	| 'loop' loop_compound_statement @loop_statement // §9.4.3
 	| 'for' '(' [for_init] ';' [for_condition] ';' [for_update] ')' compound_statement @for_statement // §9.4.4
@@ -318,8 +361,7 @@ statement:
 	// TODO: check if using & here makes it recover better https://github.com/0x2a-42/lelwel/issues/34
 	// See: https://github.com/wgsl-analyzer/wgsl-analyzer/issues/684
 	| '{' statement* '}' @compound_statement // §9.1
-	)
-	| ?2 function_call ';' @function_call_statement // §9.5
+	| ?4 function_call ';' @function_call_statement // §9.5
 	| variable_declaration_semi @variable_declaration
 	| let_declaration_semi @let_declaration
 	| const_declaration_semi @const_declaration
@@ -410,5 +452,23 @@ lhs_expression:
 	| '*' lhs_expression @unary_expression // §8.14
 	| '&' lhs_expression @unary_expression // §8.13
 	| '(' lhs_expression ')' @paren_expression // §8.4
+	| path @ident_expression
+	;
+
+// `lhs_expression` restricted to forms whose FIRST token is NOT `(` (a leading `*`, `&`, or
+// path). Used by the attributed assignment statement so that `@attr (x) = ...` can never
+// parse as an attribute followed by a parenthesized assignment.
+//
+// Note: the `*`/`&` operands recurse on THIS rule, not the full `lhs_expression`, so a
+// redundant leading paren right after a deref (`*(p) = ...`) is not accepted in statement
+// position — write `*p = ...`, which is semantically identical (grouping parens never matter
+// for an lhs prefix). Letting the operand be the full `lhs_expression` would put its postfix
+// `[`/`.` loop in conflict with this rule's own postfix loop (LL(1) / lelwel E012); resolving
+// that needs a semantic predicate, which this FIRST-set split exists to avoid.
+lhs_expression_no_paren:
+	lhs_expression_no_paren '[' expression ']' @indexing_expression // §8.5
+	| lhs_expression_no_paren '.' (Identifier @field_expression) // §8.5
+	| '*' lhs_expression_no_paren @unary_expression // §8.14
+	| '&' lhs_expression_no_paren @unary_expression // §8.13
 	| path @ident_expression
 	;

@@ -198,6 +198,15 @@ impl<'source> ParserCallbacks<'source> for Parser<'source> {
         self.is_func_call()
     }
 
+    // `?3`/`?4` mirror `?1`/`?2` for the bare (no-attribute) statement branch; see `statement`.
+    fn predicate_statement_3(&self) -> bool {
+        self.peek(1) == Token::If
+    }
+
+    fn predicate_statement_4(&self) -> bool {
+        self.is_func_call()
+    }
+
     fn predicate_continuing_compound_statement_1(&self) -> bool {
         self.peek(1) != Token::If
     }

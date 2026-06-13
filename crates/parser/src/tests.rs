@@ -2437,7 +2437,7 @@ fn annotation_with_invalid_statement_recover() {
 }",
         expect![[r#"
             SourceFile@0..103
-              FunctionDeclaration@0..72
+              FunctionDeclaration@0..101
                 Fn@0..2 "fn"
                 Blankspace@2..3 " "
                 Name@3..6
@@ -2446,22 +2446,19 @@ fn annotation_with_invalid_statement_recover() {
                   ParenthesisLeft@6..7 "("
                   ParenthesisRight@7..8 ")"
                 Blankspace@8..9 " "
-                CompoundStatement@9..72
+                CompoundStatement@9..101
                   BraceLeft@9..10 "{"
                   Blankspace@10..15 "\n    "
-                  IfStatement@15..38
-                    OtherAttribute@15..16
+                  LetDeclaration@15..66
+                    IfAttribute@15..33
                       AttributeOperator@15..16 "@"
-                    IfClause@16..38
                       If@16..18 "if"
-                      ParenthesisExpression@18..33
-                        ParenthesisLeft@18..19 "("
-                        IdentExpression@19..32
-                          Path@19..32
-                            Identifier@19..32 "MIXOKLAB_SRGB"
-                        ParenthesisRight@32..33 ")"
-                      Blankspace@33..38 "\n    "
-                  LetDeclaration@38..66
+                      ParenthesisLeft@18..19 "("
+                      IdentExpression@19..32
+                        Path@19..32
+                          Identifier@19..32 "MIXOKLAB_SRGB"
+                      ParenthesisRight@32..33 ")"
+                    Blankspace@33..38 "\n    "
                     Let@38..41 "let"
                     Blankspace@41..42 " "
                     Name@42..48
@@ -2481,35 +2478,29 @@ fn annotation_with_invalid_statement_recover() {
                         ParenthesisRight@64..65 ")"
                     Semicolon@65..66 ";"
                   Blankspace@66..71 "\n    "
-                  Error@71..72
-                    OtherAttribute@71..72
+                  LetDeclaration@71..99
+                    ElseAttribute@71..76
                       AttributeOperator@71..72 "@"
-              Error@72..76
-                Else@72..76 "else"
-              Blankspace@76..81 "\n    "
-              Error@81..99
-                Let@81..84 "let"
-                Blankspace@84..85 " "
-                Name@85..91
-                  Identifier@85..91 "colorA"
-                Blankspace@91..92 " "
-                Equal@92..93 "="
-                Blankspace@93..94 " "
-                IdentExpression@94..98
-                  Path@94..98
-                    Identifier@94..98 "colA"
-                Semicolon@98..99 ";"
-              Blankspace@99..100 "\n"
-              Error@100..103
-                BraceRight@100..101 "}"
-                Blankspace@101..102 "\n"
+                      Else@72..76 "else"
+                    Blankspace@76..81 "\n    "
+                    Let@81..84 "let"
+                    Blankspace@84..85 " "
+                    Name@85..91
+                      Identifier@85..91 "colorA"
+                    Blankspace@91..92 " "
+                    Equal@92..93 "="
+                    Blankspace@93..94 " "
+                    IdentExpression@94..98
+                      Path@94..98
+                        Identifier@94..98 "colA"
+                    Semicolon@98..99 ";"
+                  Blankspace@99..100 "\n"
+                  BraceRight@100..101 "}"
+              Blankspace@101..102 "\n"
+              Error@102..103
                 BraceRight@102..103 "}"
 
-            error at 16..18: invalid syntax, expected one of: 'align', 'binding', 'blend_src', 'builtin', 'compute', 'const', 'diagnostic', 'early_depth_test', 'fragment', 'group', 'id', <identifier>, 'interpolate', 'invariant', 'location', 'must_use', 'size', 'vertex', 'workgroup_size'
-            error at 38..41: invalid syntax, expected one of: '@', '{'
-            error at 72..76: invalid syntax, expected one of: 'align', 'binding', 'blend_src', 'builtin', 'compute', 'const', 'diagnostic', 'early_depth_test', 'fragment', 'group', 'id', <identifier>, 'interpolate', 'invariant', 'location', 'must_use', 'size', 'vertex', 'workgroup_size'
-            error at 81..99: global let declarations are not allowed
-            error at 100..101: invalid syntax, expected one of: 'alias', '@', 'const', 'const_assert', 'diagnostic', <end of file>, 'enable', 'fn', 'import', 'let', 'override', 'requires', ';', 'struct', 'var'"#]],
+            error at 102..103: invalid syntax, expected one of: 'alias', '@', 'const', 'const_assert', 'diagnostic', <end of file>, 'enable', 'fn', 'import', 'let', 'override', 'requires', ';', 'struct', 'var'"#]],
     );
 }
 
@@ -3739,4 +3730,256 @@ fn struct_recover_semicolon_instead_of_comma() {
 
             error at 21..22: invalid syntax, expected ','"#]],
     );
+}
+
+// ---- wesl-spec#191: option 2 — no attributes on `(`-prefixed statements ----
+
+#[test]
+fn opt2_attr_before_deref_assignment() {
+    // attribute before a `*`-prefixed assignment: now allowed
+    check_statement("@foo *p = 3;", expect![[r#"
+        SourceFile@0..12
+          AssignmentStatement@0..12
+            OtherAttribute@0..4
+              AttributeOperator@0..1 "@"
+              Identifier@1..4 "foo"
+            Blankspace@4..5 " "
+            PrefixExpression@5..7
+              Star@5..6 "*"
+              IdentExpression@6..7
+                Path@6..7
+                  Identifier@6..7 "p"
+            Blankspace@7..8 " "
+            Equal@8..9 "="
+            Blankspace@9..10 " "
+            Literal@10..11
+              IntLiteral@10..11 "3"
+            Semicolon@11..12 ";""#]]);
+}
+
+#[test]
+fn opt2_attr_before_ident_assignment() {
+    // attribute before a plain identifier assignment: now allowed
+    check_statement("@foo a = 3;", expect![[r#"
+        SourceFile@0..11
+          AssignmentStatement@0..11
+            OtherAttribute@0..4
+              AttributeOperator@0..1 "@"
+              Identifier@1..4 "foo"
+            Blankspace@4..5 " "
+            IdentExpression@5..6
+              Path@5..6
+                Identifier@5..6 "a"
+            Blankspace@6..7 " "
+            Equal@7..8 "="
+            Blankspace@8..9 " "
+            Literal@9..10
+              IntLiteral@9..10 "3"
+            Semicolon@10..11 ";""#]]);
+}
+
+#[test]
+fn opt2_attr_before_paren_assignment_rejected() {
+    // attribute before a `(`-prefixed assignment: the `(p)` binds to the attribute
+    // as its argument list, then `= 3` has no lhs -> error. (the option-2 restriction)
+    check_statement("@foo (p) = 3;", expect![[r#"
+        SourceFile@0..13
+          EmptyStatement@0..13
+            OtherAttribute@0..8
+              AttributeOperator@0..1 "@"
+              Identifier@1..4 "foo"
+              Blankspace@4..5 " "
+              Arguments@5..8
+                ParenthesisLeft@5..6 "("
+                IdentExpression@6..7
+                  Path@6..7
+                    Identifier@6..7 "p"
+                ParenthesisRight@7..8 ")"
+            Blankspace@8..9 " "
+            Error@9..12
+              Equal@9..10 "="
+              Blankspace@10..11 " "
+              IntLiteral@11..12 "3"
+            Semicolon@12..13 ";"
+
+        error at 9..10: invalid syntax, expected one of: '&', '@', '{', 'break', 'const', 'const_assert', 'continue', 'discard', 'for', <identifier>, 'if', 'let', 'loop', 'package', 'return', ';', '*', 'super', 'switch', '_', 'var', 'while'"#]]);
+}
+
+#[test]
+fn opt2_paren_assignment_no_attr_ok() {
+    // `(`-prefixed assignment with NO attribute still parses fine
+    check_statement("(p) = 3;", expect![[r#"
+        SourceFile@0..8
+          AssignmentStatement@0..8
+            ParenthesisExpression@0..3
+              ParenthesisLeft@0..1 "("
+              IdentExpression@1..2
+                Path@1..2
+                  Identifier@1..2 "p"
+              ParenthesisRight@2..3 ")"
+            Blankspace@3..4 " "
+            Equal@4..5 "="
+            Blankspace@5..6 " "
+            Literal@6..7
+              IntLiteral@6..7 "3"
+            Semicolon@7..8 ";""#]]);
+}
+
+#[test]
+fn opt2_attr_before_return() {
+    check_statement("@foo return;", expect![[r#"
+        SourceFile@0..12
+          ReturnStatement@0..12
+            OtherAttribute@0..4
+              AttributeOperator@0..1 "@"
+              Identifier@1..4 "foo"
+            Blankspace@4..5 " "
+            Return@5..11 "return"
+            Semicolon@11..12 ";""#]]);
+}
+
+#[test]
+fn opt2_attr_before_funccall() {
+    check_statement("@foo bar();", expect![[r#"
+        SourceFile@0..11
+          FunctionCallStatement@0..11
+            OtherAttribute@0..4
+              AttributeOperator@0..1 "@"
+              Identifier@1..4 "foo"
+            Blankspace@4..5 " "
+            FunctionCall@5..10
+              IdentExpression@5..8
+                Path@5..8
+                  Identifier@5..8 "bar"
+              Arguments@8..10
+                ParenthesisLeft@8..9 "("
+                ParenthesisRight@9..10 ")"
+            Semicolon@10..11 ";""#]]);
+}
+
+#[test]
+fn opt2_if_elif_else_chain() {
+    // realistic WESL conditional-translation chain in a function body.
+    // @if/@else use keyword branches; @elif rides the generic identifier path.
+    check(
+        "fn f() { @if(A) let x = 1; @elif(B) let x = 2; @else let x = 3; }",
+        expect![[r#"
+            SourceFile@0..65
+              FunctionDeclaration@0..65
+                Fn@0..2 "fn"
+                Blankspace@2..3 " "
+                Name@3..4
+                  Identifier@3..4 "f"
+                FunctionParameters@4..6
+                  ParenthesisLeft@4..5 "("
+                  ParenthesisRight@5..6 ")"
+                Blankspace@6..7 " "
+                CompoundStatement@7..65
+                  BraceLeft@7..8 "{"
+                  Blankspace@8..9 " "
+                  LetDeclaration@9..26
+                    IfAttribute@9..15
+                      AttributeOperator@9..10 "@"
+                      If@10..12 "if"
+                      ParenthesisLeft@12..13 "("
+                      IdentExpression@13..14
+                        Path@13..14
+                          Identifier@13..14 "A"
+                      ParenthesisRight@14..15 ")"
+                    Blankspace@15..16 " "
+                    Let@16..19 "let"
+                    Blankspace@19..20 " "
+                    Name@20..21
+                      Identifier@20..21 "x"
+                    Blankspace@21..22 " "
+                    Equal@22..23 "="
+                    Blankspace@23..24 " "
+                    Literal@24..25
+                      IntLiteral@24..25 "1"
+                    Semicolon@25..26 ";"
+                  Blankspace@26..27 " "
+                  LetDeclaration@27..46
+                    OtherAttribute@27..35
+                      AttributeOperator@27..28 "@"
+                      Identifier@28..32 "elif"
+                      Arguments@32..35
+                        ParenthesisLeft@32..33 "("
+                        IdentExpression@33..34
+                          Path@33..34
+                            Identifier@33..34 "B"
+                        ParenthesisRight@34..35 ")"
+                    Blankspace@35..36 " "
+                    Let@36..39 "let"
+                    Blankspace@39..40 " "
+                    Name@40..41
+                      Identifier@40..41 "x"
+                    Blankspace@41..42 " "
+                    Equal@42..43 "="
+                    Blankspace@43..44 " "
+                    Literal@44..45
+                      IntLiteral@44..45 "2"
+                    Semicolon@45..46 ";"
+                  Blankspace@46..47 " "
+                  LetDeclaration@47..63
+                    ElseAttribute@47..52
+                      AttributeOperator@47..48 "@"
+                      Else@48..52 "else"
+                    Blankspace@52..53 " "
+                    Let@53..56 "let"
+                    Blankspace@56..57 " "
+                    Name@57..58
+                      Identifier@57..58 "x"
+                    Blankspace@58..59 " "
+                    Equal@59..60 "="
+                    Blankspace@60..61 " "
+                    Literal@61..62
+                      IntLiteral@61..62 "3"
+                    Semicolon@62..63 ";"
+                  Blankspace@63..64 " "
+                  BraceRight@64..65 "}""#]],
+    );
+}
+// wesl-spec#191 regression guards: a deref/ref of a parenthesized lhs is valid WGSL and
+// must still parse when there is no attribute (the option-2 restriction applies only to
+// attributed statements).
+#[test]
+fn opt2_deref_paren_lhs_no_attr_is_valid_wgsl() {
+    check_statement("*(p) = 3;", expect![[r#"
+        SourceFile@0..9
+          AssignmentStatement@0..9
+            PrefixExpression@0..4
+              Star@0..1 "*"
+              ParenthesisExpression@1..4
+                ParenthesisLeft@1..2 "("
+                IdentExpression@2..3
+                  Path@2..3
+                    Identifier@2..3 "p"
+                ParenthesisRight@3..4 ")"
+            Blankspace@4..5 " "
+            Equal@5..6 "="
+            Blankspace@6..7 " "
+            Literal@7..8
+              IntLiteral@7..8 "3"
+            Semicolon@8..9 ";""#]]);
+}
+
+#[test]
+fn opt2_ref_paren_lhs_no_attr_is_valid_wgsl() {
+    check_statement("&(p) = 3;", expect![[r#"
+        SourceFile@0..9
+          AssignmentStatement@0..9
+            PrefixExpression@0..4
+              And@0..1 "&"
+              ParenthesisExpression@1..4
+                ParenthesisLeft@1..2 "("
+                IdentExpression@2..3
+                  Path@2..3
+                    Identifier@2..3 "p"
+                ParenthesisRight@3..4 ")"
+            Blankspace@4..5 " "
+            Equal@5..6 "="
+            Blankspace@6..7 " "
+            Literal@7..8
+              IntLiteral@7..8 "3"
+            Semicolon@8..9 ";""#]]);
 }

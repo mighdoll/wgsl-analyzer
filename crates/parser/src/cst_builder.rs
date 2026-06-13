@@ -158,6 +158,7 @@ impl CstBuilder<'_, '_> {
             | Rule::GlobalDeclaration
             | Rule::GlobalDirective
             | Rule::LhsExpression
+            | Rule::LhsExpressionNoParen
             | Rule::VariableUpdating
             | Rule::Attribute => {
                 panic!("{rule:?} should always be a more specific node")
@@ -179,6 +180,9 @@ impl CstBuilder<'_, '_> {
             Rule::FragmentAttr => self.start_node(SyntaxKind::FragmentAttribute),
             Rule::GroupAttr => self.start_node(SyntaxKind::GroupAttribute),
             Rule::IdAttr => self.start_node(SyntaxKind::IdAttribute),
+            // WESL conditional translation (wesl-spec#191)
+            Rule::IfAttr => self.start_node(SyntaxKind::IfAttribute),
+            Rule::ElseAttr => self.start_node(SyntaxKind::ElseAttribute),
             Rule::InterpolateAttr => self.start_node(SyntaxKind::InterpolateAttribute),
             Rule::InvariantAttr => self.start_node(SyntaxKind::InvariantAttribute),
             Rule::LocationAttr => self.start_node(SyntaxKind::LocationAttribute),
