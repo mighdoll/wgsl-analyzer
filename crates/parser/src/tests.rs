@@ -3738,7 +3738,9 @@ fn struct_recover_semicolon_instead_of_comma() {
 #[test]
 fn opt2_attr_before_deref_assignment() {
     // attribute before a `*`-prefixed assignment: now allowed
-    check_statement("@foo *p = 3;", expect![[r#"
+    check_statement(
+        "@foo *p = 3;",
+        expect![[r#"
         SourceFile@0..12
           AssignmentStatement@0..12
             OtherAttribute@0..4
@@ -3755,13 +3757,16 @@ fn opt2_attr_before_deref_assignment() {
             Blankspace@9..10 " "
             Literal@10..11
               IntLiteral@10..11 "3"
-            Semicolon@11..12 ";""#]]);
+            Semicolon@11..12 ";""#]],
+    );
 }
 
 #[test]
 fn opt2_attr_before_ident_assignment() {
     // attribute before a plain identifier assignment: now allowed
-    check_statement("@foo a = 3;", expect![[r#"
+    check_statement(
+        "@foo a = 3;",
+        expect![[r#"
         SourceFile@0..11
           AssignmentStatement@0..11
             OtherAttribute@0..4
@@ -3776,14 +3781,17 @@ fn opt2_attr_before_ident_assignment() {
             Blankspace@8..9 " "
             Literal@9..10
               IntLiteral@9..10 "3"
-            Semicolon@10..11 ";""#]]);
+            Semicolon@10..11 ";""#]],
+    );
 }
 
 #[test]
 fn opt2_attr_before_paren_assignment_rejected() {
     // attribute before a `(`-prefixed assignment: the `(p)` binds to the attribute
     // as its argument list, then `= 3` has no lhs -> error. (the option-2 restriction)
-    check_statement("@foo (p) = 3;", expect![[r#"
+    check_statement(
+        "@foo (p) = 3;",
+        expect![[r#"
         SourceFile@0..13
           EmptyStatement@0..13
             OtherAttribute@0..8
@@ -3803,13 +3811,16 @@ fn opt2_attr_before_paren_assignment_rejected() {
               IntLiteral@11..12 "3"
             Semicolon@12..13 ";"
 
-        error at 9..10: invalid syntax, expected one of: '&', '@', '{', 'break', 'const', 'const_assert', 'continue', 'discard', 'for', <identifier>, 'if', 'let', 'loop', 'package', 'return', ';', '*', 'super', 'switch', '_', 'var', 'while'"#]]);
+        error at 9..10: invalid syntax, expected one of: '&', '@', '{', 'break', 'const', 'const_assert', 'continue', 'discard', 'for', <identifier>, 'if', 'let', 'loop', 'package', 'return', ';', '*', 'super', 'switch', '_', 'var', 'while'"#]],
+    );
 }
 
 #[test]
 fn opt2_paren_assignment_no_attr_ok() {
     // `(`-prefixed assignment with NO attribute still parses fine
-    check_statement("(p) = 3;", expect![[r#"
+    check_statement(
+        "(p) = 3;",
+        expect![[r#"
         SourceFile@0..8
           AssignmentStatement@0..8
             ParenthesisExpression@0..3
@@ -3823,12 +3834,15 @@ fn opt2_paren_assignment_no_attr_ok() {
             Blankspace@5..6 " "
             Literal@6..7
               IntLiteral@6..7 "3"
-            Semicolon@7..8 ";""#]]);
+            Semicolon@7..8 ";""#]],
+    );
 }
 
 #[test]
 fn opt2_attr_before_return() {
-    check_statement("@foo return;", expect![[r#"
+    check_statement(
+        "@foo return;",
+        expect![[r#"
         SourceFile@0..12
           ReturnStatement@0..12
             OtherAttribute@0..4
@@ -3836,12 +3850,15 @@ fn opt2_attr_before_return() {
               Identifier@1..4 "foo"
             Blankspace@4..5 " "
             Return@5..11 "return"
-            Semicolon@11..12 ";""#]]);
+            Semicolon@11..12 ";""#]],
+    );
 }
 
 #[test]
 fn opt2_attr_before_funccall() {
-    check_statement("@foo bar();", expect![[r#"
+    check_statement(
+        "@foo bar();",
+        expect![[r#"
         SourceFile@0..11
           FunctionCallStatement@0..11
             OtherAttribute@0..4
@@ -3855,7 +3872,8 @@ fn opt2_attr_before_funccall() {
               Arguments@8..10
                 ParenthesisLeft@8..9 "("
                 ParenthesisRight@9..10 ")"
-            Semicolon@10..11 ";""#]]);
+            Semicolon@10..11 ";""#]],
+    );
 }
 
 #[test]
@@ -3946,7 +3964,9 @@ fn opt2_if_elif_else_chain() {
 // attributed statements).
 #[test]
 fn opt2_deref_paren_lhs_no_attr_is_valid_wgsl() {
-    check_statement("*(p) = 3;", expect![[r#"
+    check_statement(
+        "*(p) = 3;",
+        expect![[r#"
         SourceFile@0..9
           AssignmentStatement@0..9
             PrefixExpression@0..4
@@ -3962,12 +3982,15 @@ fn opt2_deref_paren_lhs_no_attr_is_valid_wgsl() {
             Blankspace@6..7 " "
             Literal@7..8
               IntLiteral@7..8 "3"
-            Semicolon@8..9 ";""#]]);
+            Semicolon@8..9 ";""#]],
+    );
 }
 
 #[test]
 fn opt2_ref_paren_lhs_no_attr_is_valid_wgsl() {
-    check_statement("&(p) = 3;", expect![[r#"
+    check_statement(
+        "&(p) = 3;",
+        expect![[r#"
         SourceFile@0..9
           AssignmentStatement@0..9
             PrefixExpression@0..4
@@ -3983,5 +4006,6 @@ fn opt2_ref_paren_lhs_no_attr_is_valid_wgsl() {
             Blankspace@6..7 " "
             Literal@7..8
               IntLiteral@7..8 "3"
-            Semicolon@8..9 ";""#]]);
+            Semicolon@8..9 ";""#]],
+    );
 }
