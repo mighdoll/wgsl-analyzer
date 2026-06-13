@@ -151,6 +151,7 @@ impl CstBuilder<'_, '_> {
             | Rule::CaseSelector
             | Rule::TemplateArgs
             | Rule::TypedIdent
+            | Rule::LhsExpressionNoParen
             | Rule::VariableDeclarationSemi => {
                 panic!("{rule:?} is elided")
             },
@@ -158,7 +159,8 @@ impl CstBuilder<'_, '_> {
             | Rule::GlobalDeclaration
             | Rule::GlobalDirective
             | Rule::LhsExpression
-            | Rule::LhsExpressionNoParen
+            | Rule::LhsPrefix
+            | Rule::LhsPath
             | Rule::VariableUpdating
             | Rule::Attribute => {
                 panic!("{rule:?} should always be a more specific node")

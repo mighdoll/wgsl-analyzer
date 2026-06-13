@@ -454,22 +454,31 @@ lhs_expression:
 	| path @ident_expression
 	;
 
-// `lhs_expression` restricted to forms whose FIRST token is NOT `(` (a leading `*`, `&`, or
-// path). Used by the attributed assignment statement so that `@attr (x) = ...` can never
-// parse as an attribute followed by a parenthesized assignment.
+// `lhs_expression` restricted to forms whose FIRST token is NOT `(`. Used by the attributed
+// assignment statement so that `@attr (x) = ...` can never parse as an attribute followed by a
+// parenthesized assignment. Only the *leading* token of the statement is constrained: operands
+// after a `*`/`&` may still be parenthesized (`@if(c) *(p) = ...` parses), which matches the
+// spec's restriction (only a `(`-leading lhs is disallowed after an attribute) and avoids any
+// implementation-specific quirk.
 //
-// Note: the `*`/`&` operands recurse on THIS rule, not the full `lhs_expression`, so a
-// redundant leading paren right after a deref (`*(p) = ...`) is rejected ONLY in the
-// attributed branch (`@if(c) *(p) = ...`) — write `@if(c) *p = ...`, which is semantically
-// identical (grouping parens never matter for an lhs prefix). Plain `*(p) = ...` with no
-// attribute is valid WGSL and parses fine via the bare branch's full `lhs_expression`.
-// Letting the operand here be the full `lhs_expression` would put its postfix `[`/`.` loop in
-// conflict with this rule's own postfix loop (LL(1) / lelwel E012); resolving that needs a
-// semantic predicate, which this FIRST-set split exists to avoid.
-lhs_expression_no_paren:
-	lhs_expression_no_paren '[' expression ']' @indexing_expression // §8.5
-	| lhs_expression_no_paren '.' (Identifier @field_expression) // §8.5
-	| '*' lhs_expression_no_paren @unary_expression // §8.14
-	| '&' lhs_expression_no_paren @unary_expression // §8.13
+// Transparent (`^`) chooser between the two non-`(` lhs shapes. The split into `lhs_prefix`
+// and `lhs_path` keeps each rule's postfix loop separate from the `*`/`&` operand's postfix
+// loop; folding them together would be an LL(1) conflict (lelwel E012).
+lhs_expression_no_paren^:
+	lhs_prefix
+	| lhs_path
+	;
+
+// `*`/`&` applied to a full `lhs_expression` (so the operand may be parenthesized). Its own
+// rule, not inlined into the `^` chooser above, so the `@unary_expression` node survives.
+lhs_prefix:
+	'*' lhs_expression @unary_expression // §8.14
+	| '&' lhs_expression @unary_expression // §8.13
+	;
+
+// A path with optional index/field postfixes: `foo`, `foo[0]`, `foo.bar[1]`.
+lhs_path:
+	lhs_path '[' expression ']' @indexing_expression // §8.5
+	| lhs_path '.' (Identifier @field_expression) // §8.5
 	| path @ident_expression
 	;

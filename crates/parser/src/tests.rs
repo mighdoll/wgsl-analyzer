@@ -4074,3 +4074,40 @@ fn edition_attribute_before_compound_ok_in_wgsl() {
             BraceRight@42..43 "}""#]],
     );
 }
+
+#[test]
+fn opt2_attr_before_deref_of_paren_ok() {
+    // Consistency with the spec / wesl-rs: only a `(`-LEADING lhs is restricted after an
+    // attribute. A deref/ref of a parenthesized lhs starts with `*`/`&`, so it is allowed.
+    check_statement_with_edition(
+        Edition::Wesl2025Unstable,
+        "@if(C) *(p) = 3;",
+        expect![[r#"
+        SourceFile@0..16
+          AssignmentStatement@0..16
+            OtherAttribute@0..6
+              AttributeOperator@0..1 "@"
+              If@1..3 "if"
+              Arguments@3..6
+                ParenthesisLeft@3..4 "("
+                IdentExpression@4..5
+                  Path@4..5
+                    Identifier@4..5 "C"
+                ParenthesisRight@5..6 ")"
+            Blankspace@6..7 " "
+            PrefixExpression@7..11
+              Star@7..8 "*"
+              ParenthesisExpression@8..11
+                ParenthesisLeft@8..9 "("
+                IdentExpression@9..10
+                  Path@9..10
+                    Identifier@9..10 "p"
+                ParenthesisRight@10..11 ")"
+            Blankspace@11..12 " "
+            Equal@12..13 "="
+            Blankspace@13..14 " "
+            Literal@14..15
+              IntLiteral@14..15 "3"
+            Semicolon@15..16 ";""#]],
+    );
+}
