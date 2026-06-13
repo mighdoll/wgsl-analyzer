@@ -343,6 +343,27 @@ impl<'source> ParserCallbacks<'source> for Parser<'source> {
         None
     }
 
+    /// Called when semantic action `#1` in rule `statement` is visited, i.e. the attributed
+    /// statement branch (`attribute+ ...`). Attributes before statements are a WESL extension.
+    /// WGSL only permits them before compound and control-flow statements (e.g. `@diagnostic`),
+    /// so flag the other (WESL-only) positions when parsing in WGSL mode. The attribute-name
+    /// legality itself is checked in a later, edition-aware pass.
+    fn action_statement_1(
+        &mut self,
+        diags: &mut Vec<Self::Diagnostic>,
+    ) {
+        let allowed_in_wgsl = matches!(
+            self.peek(0),
+            Token::If | Token::Switch | Token::Loop | Token::For | Token::While | Token::BraceLeft
+        );
+        if self.context.edition == Edition::Wgsl && !allowed_in_wgsl {
+            diags.push(self.create_diagnostic(
+                self.span(),
+                "attributes are not allowed before this statement in WGSL".to_owned(),
+            ));
+        }
+    }
+
     /// Called when semantic action `#2` in rule `global_item` is visited.
     fn action_global_item_2(
         &mut self,

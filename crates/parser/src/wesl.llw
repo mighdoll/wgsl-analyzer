@@ -321,7 +321,7 @@ argument_expression_list_expr: '(' [expression (?1 ',' expression)* [',']] ')' @
 // into a shared rule) because an attribute must attach inside the relabeled statement node,
 // which only happens when `attribute+` and the `@node` markers live in the same rule.
 statement:
-	attribute+ (
+	attribute+ #1 (
 		if_clause (?1 else_if_clause | else_clause)* @if_statement // §9.4.1
 		| 'switch' expression switch_body @switch_statement // §9.4.2
 		| 'loop' loop_compound_statement @loop_statement // §9.4.3
@@ -459,11 +459,13 @@ lhs_expression:
 // parse as an attribute followed by a parenthesized assignment.
 //
 // Note: the `*`/`&` operands recurse on THIS rule, not the full `lhs_expression`, so a
-// redundant leading paren right after a deref (`*(p) = ...`) is not accepted in statement
-// position — write `*p = ...`, which is semantically identical (grouping parens never matter
-// for an lhs prefix). Letting the operand be the full `lhs_expression` would put its postfix
-// `[`/`.` loop in conflict with this rule's own postfix loop (LL(1) / lelwel E012); resolving
-// that needs a semantic predicate, which this FIRST-set split exists to avoid.
+// redundant leading paren right after a deref (`*(p) = ...`) is rejected ONLY in the
+// attributed branch (`@if(c) *(p) = ...`) — write `@if(c) *p = ...`, which is semantically
+// identical (grouping parens never matter for an lhs prefix). Plain `*(p) = ...` with no
+// attribute is valid WGSL and parses fine via the bare branch's full `lhs_expression`.
+// Letting the operand here be the full `lhs_expression` would put its postfix `[`/`.` loop in
+// conflict with this rule's own postfix loop (LL(1) / lelwel E012); resolving that needs a
+// semantic predicate, which this FIRST-set split exists to avoid.
 lhs_expression_no_paren:
 	lhs_expression_no_paren '[' expression ']' @indexing_expression // §8.5
 	| lhs_expression_no_paren '.' (Identifier @field_expression) // §8.5

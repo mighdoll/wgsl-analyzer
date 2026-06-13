@@ -2426,8 +2426,11 @@ fn let_statement_missing_initializer() {
 }
 
 #[test]
-fn annotation_with_invalid_statement_recover() {
-    check(
+fn attribute_before_let_then_extra_brace_recover() {
+    // `@if`/`@else` before `let` now parse cleanly as WESL conditional translation; the only
+    // error is the genuinely-extra trailing `}`.
+    check_with_edition(
+        Edition::Wesl2025Unstable,
         "fn foo() {
     @if(MIXOKLAB_SRGB)
     let colorA = srgb2rgb(colA);
@@ -3737,8 +3740,9 @@ fn struct_recover_semicolon_instead_of_comma() {
 
 #[test]
 fn opt2_attr_before_deref_assignment() {
-    // attribute before a `*`-prefixed assignment: now allowed
-    check_statement(
+    // attribute before a `*`-prefixed assignment: now allowed (WESL)
+    check_statement_with_edition(
+        Edition::Wesl2025Unstable,
         "@foo *p = 3;",
         expect![[r#"
         SourceFile@0..12
@@ -3763,8 +3767,9 @@ fn opt2_attr_before_deref_assignment() {
 
 #[test]
 fn opt2_attr_before_ident_assignment() {
-    // attribute before a plain identifier assignment: now allowed
-    check_statement(
+    // attribute before a plain identifier assignment: now allowed (WESL)
+    check_statement_with_edition(
+        Edition::Wesl2025Unstable,
         "@foo a = 3;",
         expect![[r#"
         SourceFile@0..11
@@ -3789,7 +3794,8 @@ fn opt2_attr_before_ident_assignment() {
 fn opt2_attr_before_paren_assignment_rejected() {
     // attribute before a `(`-prefixed assignment: the `(p)` binds to the attribute
     // as its argument list, then `= 3` has no lhs -> error. (the option-2 restriction)
-    check_statement(
+    check_statement_with_edition(
+        Edition::Wesl2025Unstable,
         "@foo (p) = 3;",
         expect![[r#"
         SourceFile@0..13
@@ -3840,7 +3846,8 @@ fn opt2_paren_assignment_no_attr_ok() {
 
 #[test]
 fn opt2_attr_before_return() {
-    check_statement(
+    check_statement_with_edition(
+        Edition::Wesl2025Unstable,
         "@foo return;",
         expect![[r#"
         SourceFile@0..12
@@ -3856,7 +3863,8 @@ fn opt2_attr_before_return() {
 
 #[test]
 fn opt2_attr_before_funccall() {
-    check_statement(
+    check_statement_with_edition(
+        Edition::Wesl2025Unstable,
         "@foo bar();",
         expect![[r#"
         SourceFile@0..11
@@ -3880,7 +3888,8 @@ fn opt2_attr_before_funccall() {
 fn opt2_if_elif_else_chain() {
     // realistic WESL conditional-translation chain in a function body.
     // @if/@else use keyword branches; @elif rides the generic identifier path.
-    check(
+    check_with_edition(
+        Edition::Wesl2025Unstable,
         "fn f() { @if(A) let x = 1; @elif(B) let x = 2; @else let x = 3; }",
         expect![[r#"
             SourceFile@0..65
@@ -4007,5 +4016,61 @@ fn opt2_ref_paren_lhs_no_attr_is_valid_wgsl() {
             Literal@7..8
               IntLiteral@7..8 "3"
             Semicolon@8..9 ";""#]],
+    );
+}
+
+#[test]
+fn edition_attribute_before_statement_requires_wesl() {
+    // In WGSL mode, an attribute before a non-control-flow statement (a WESL extension) is
+    // flagged with an edition diagnostic, mirroring imports / qualified paths.
+    check_statement(
+        "@foo let x = 1;",
+        expect![[r#"
+        SourceFile@0..15
+          LetDeclaration@0..15
+            OtherAttribute@0..4
+              AttributeOperator@0..1 "@"
+              Identifier@1..4 "foo"
+            Blankspace@4..5 " "
+            Let@5..8 "let"
+            Blankspace@8..9 " "
+            Name@9..10
+              Identifier@9..10 "x"
+            Blankspace@10..11 " "
+            Equal@11..12 "="
+            Blankspace@12..13 " "
+            Literal@13..14
+              IntLiteral@13..14 "1"
+            Semicolon@14..15 ";"
+
+        error at 5..8: attributes are not allowed before this statement in WGSL"#]],
+    );
+}
+
+#[test]
+fn edition_attribute_before_compound_ok_in_wgsl() {
+    // WGSL validly allows attributes (e.g. @diagnostic) before a compound statement, so no
+    // edition diagnostic is emitted there.
+    check_statement(
+        "@diagnostic(off, derivative_uniformity) { }",
+        expect![[r#"
+        SourceFile@0..43
+          CompoundStatement@0..43
+            DiagnosticAttribute@0..39
+              AttributeOperator@0..1 "@"
+              Diagnostic@1..11 "diagnostic"
+              DiagnosticControl@11..39
+                ParenthesisLeft@11..12 "("
+                SeverityControlName@12..15
+                  Identifier@12..15 "off"
+                Comma@15..16 ","
+                Blankspace@16..17 " "
+                DiagnosticRuleName@17..38
+                  Identifier@17..38 "derivative_uniformity"
+                ParenthesisRight@38..39 ")"
+            Blankspace@39..40 " "
+            BraceLeft@40..41 "{"
+            Blankspace@41..42 " "
+            BraceRight@42..43 "}""#]],
     );
 }
