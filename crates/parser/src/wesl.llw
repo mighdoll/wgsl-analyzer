@@ -352,7 +352,7 @@ statement:
 	// (e.g. `if { } else { } else if (...) { }`), enabling the formatter and IDE
 	// features to operate on it.
 	// A parser-level diagnostic in `create_node_if_statement` reports the error.
-	| if_clause (?3 else_if_clause | else_clause)* @if_statement // §9.4.1
+	| if_clause (?1 else_if_clause | else_clause)* @if_statement // §9.4.1
 	| 'switch' expression switch_body @switch_statement // §9.4.2
 	| 'loop' loop_compound_statement @loop_statement // §9.4.3
 	| 'for' '(' [for_init] ';' [for_condition] ';' [for_update] ')' compound_statement @for_statement // §9.4.4
@@ -360,7 +360,7 @@ statement:
 	// TODO: check if using & here makes it recover better https://github.com/0x2a-42/lelwel/issues/34
 	// See: https://github.com/wgsl-analyzer/wgsl-analyzer/issues/684
 	| '{' statement* '}' @compound_statement // §9.1
-	| ?4 function_call ';' @function_call_statement // §9.5
+	| ?2 function_call ';' @function_call_statement // §9.5
 	| variable_declaration_semi @variable_declaration
 	| let_declaration_semi @let_declaration
 	| const_declaration_semi @const_declaration
