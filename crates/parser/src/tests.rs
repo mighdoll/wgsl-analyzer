@@ -2450,14 +2450,15 @@ fn annotation_with_invalid_statement_recover() {
                   BraceLeft@9..10 "{"
                   Blankspace@10..15 "\n    "
                   LetDeclaration@15..66
-                    IfAttribute@15..33
+                    OtherAttribute@15..33
                       AttributeOperator@15..16 "@"
                       If@16..18 "if"
-                      ParenthesisLeft@18..19 "("
-                      IdentExpression@19..32
-                        Path@19..32
-                          Identifier@19..32 "MIXOKLAB_SRGB"
-                      ParenthesisRight@32..33 ")"
+                      Arguments@18..33
+                        ParenthesisLeft@18..19 "("
+                        IdentExpression@19..32
+                          Path@19..32
+                            Identifier@19..32 "MIXOKLAB_SRGB"
+                        ParenthesisRight@32..33 ")"
                     Blankspace@33..38 "\n    "
                     Let@38..41 "let"
                     Blankspace@41..42 " "
@@ -2479,7 +2480,7 @@ fn annotation_with_invalid_statement_recover() {
                     Semicolon@65..66 ";"
                   Blankspace@66..71 "\n    "
                   LetDeclaration@71..99
-                    ElseAttribute@71..76
+                    OtherAttribute@71..76
                       AttributeOperator@71..72 "@"
                       Else@72..76 "else"
                     Blankspace@76..81 "\n    "
@@ -3878,14 +3879,15 @@ fn opt2_if_elif_else_chain() {
                   BraceLeft@7..8 "{"
                   Blankspace@8..9 " "
                   LetDeclaration@9..26
-                    IfAttribute@9..15
+                    OtherAttribute@9..15
                       AttributeOperator@9..10 "@"
                       If@10..12 "if"
-                      ParenthesisLeft@12..13 "("
-                      IdentExpression@13..14
-                        Path@13..14
-                          Identifier@13..14 "A"
-                      ParenthesisRight@14..15 ")"
+                      Arguments@12..15
+                        ParenthesisLeft@12..13 "("
+                        IdentExpression@13..14
+                          Path@13..14
+                            Identifier@13..14 "A"
+                        ParenthesisRight@14..15 ")"
                     Blankspace@15..16 " "
                     Let@16..19 "let"
                     Blankspace@19..20 " "
@@ -3921,7 +3923,7 @@ fn opt2_if_elif_else_chain() {
                     Semicolon@45..46 ";"
                   Blankspace@46..47 " "
                   LetDeclaration@47..63
-                    ElseAttribute@47..52
+                    OtherAttribute@47..52
                       AttributeOperator@47..48 "@"
                       Else@48..52 "else"
                     Blankspace@52..53 " "

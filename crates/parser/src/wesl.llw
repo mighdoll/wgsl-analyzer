@@ -212,12 +212,11 @@ attribute:
 			| 'fragment' @fragment_attr
 			| 'compute' @compute_attr
 			| 'early_depth_test' '(' early_depth_test_mode ')' @early_depth_test_attr
-			// WESL conditional translation (wesl-spec): `@if` / `@else` use the `if`/`else`
-			// keyword tokens, so they need explicit branches. `@elif` is an identifier and
-			// is handled by the generic `Identifier` branch below as an OtherAttribute.
-			| 'if' '(' expression [','] ')' @if_attr
-			| 'else' @else_attr
-			| Identifier [ argument_expression_list ] @other_attr
+			// WESL conditional-translation attributes (`@if`, `@elif`, `@else`) and any
+			// user-defined attributes all parse generically as OtherAttribute and are
+			// recognized by name in a later pass. `if`/`else` are keyword tokens, so they are
+			// listed explicitly here alongside Identifier (`elif` is already an identifier).
+			| ('if' | 'else' | Identifier) [ argument_expression_list ] @other_attr
 	)
 ;
 

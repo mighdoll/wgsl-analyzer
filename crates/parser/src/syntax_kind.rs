@@ -236,8 +236,6 @@ pub enum SyntaxKind {
     ConstantAttribute,
     GroupAttribute,
     IdAttribute,
-    IfAttribute,
-    ElseAttribute,
     InterpolateAttribute,
     InvariantAttribute,
     LocationAttribute,
