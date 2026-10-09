@@ -28,6 +28,7 @@ use crate::{
     discover::{self, DiscoverArgument},
     in_memory_documents::InMemoryDocuments,
     line_index::{LineEndings, LineIndex},
+    long_poll::SuspendedRequest,
     lsp::{from_proto, to_proto, utilities::PartialResultSender},
     main_loop::Task,
     operation_queue::{Cause, OperationQueue},
@@ -57,6 +58,9 @@ pub(crate) struct GlobalState {
     pub(crate) request_queue: RequestQueue,
     pub(crate) task_pool: HandleReceiver<TaskPool<Task>, Receiver<Task>>,
     pub(crate) fmt_pool: HandleReceiver<TaskPool<Task>, Receiver<Task>>,
+    /// The `workspace/diagnostic` request held open by long polling, if any. It
+    /// stays registered in `request_queue` until it is answered.
+    pub(crate) suspended_request: SuspendedRequest,
 
     // status
     pub(crate) shutdown_requested: bool,
@@ -181,6 +185,7 @@ impl GlobalState {
             request_queue: RequestQueue::default(),
             task_pool,
             fmt_pool,
+            suspended_request: SuspendedRequest::default(),
             shutdown_requested: false,
             last_reported_status: crate::lsp::extensions::ServerStatusParameters {
                 health: crate::lsp::extensions::Health::Error,

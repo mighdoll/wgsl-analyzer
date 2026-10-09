@@ -53,6 +53,10 @@ impl GlobalState {
             self.analysis_host
                 .update_capabilities(self.config.capabilities());
         }
+        // The configuration decides which diagnostics a pull reports. A
+        // configuration change touches no file, so without this wake a suspended
+        // pull would wait for the next edit.
+        self.wake_suspended_request();
     }
 
     pub(crate) fn current_status(&self) -> lsp::extensions::ServerStatusParameters {

@@ -16,10 +16,16 @@ use stdx::thread::ThreadIntent;
 use crate::{
     Result,
     global_state::{GlobalState, GlobalStateSnapshot},
+    long_poll::{LongPoll, Suspended},
     lsp::LspError,
     main_loop::Task,
     version::version,
 };
+
+/// A handler that may leave its request unanswered for now (see
+/// [`RequestDispatcher::on_long_poll`]).
+type LongPollHandler<Params, Result> =
+    fn(GlobalStateSnapshot, Params) -> anyhow::Result<LongPoll<Result>>;
 
 /// A visitor for routing a raw JSON request to an appropriate handler function.
 ///
@@ -159,6 +165,51 @@ impl<'global_state> RequestDispatcher<'global_state> {
         )
     }
 
+    /// Like [`Self::on_with_vfs_default`], for a request whose handler may leave
+    /// it unanswered for now (see [`crate::long_poll`]). When the handler returns
+    /// [`LongPoll::Suspend`], the request goes back to the main loop as a
+    /// [`Task::Suspend`] instead of a response. `default()` answers the request
+    /// while the VFS loads, and is also the answer the main loop sends if it
+    /// gives up on a suspended request.
+    pub(crate) fn on_long_poll<Request>(
+        &mut self,
+        function: LongPollHandler<Request::Params, Request::Result>,
+        default: fn() -> Request::Result,
+        on_cancelled: fn() -> ResponseError,
+    ) -> &mut Self
+    where
+        Request: LspRequest<
+                Params: DeserializeOwned + panic::UnwindSafe + Send + fmt::Debug,
+                Result: Serialize,
+            > + 'static,
+    {
+        if self.answered_while_vfs_loads::<Request>(default) {
+            return self;
+        }
+        let Some((request, parameters, panic_context)) = self.parse::<Request>() else {
+            return self;
+        };
+        let _guard =
+            tracing::info_span!("request", method = ?request.method, "request_id" = ?request.id)
+                .entered();
+        tracing::debug!(?parameters);
+
+        // Taken with the snapshot below, so that `SuspendedRequest::park` can
+        // tell whether the state changed while the handler ran.
+        let changes = self.global_state.suspended_request.changes();
+        let world = self.global_state.snapshot();
+        let task_pool = &mut self.global_state.task_pool.handle;
+        task_pool.spawn(ThreadIntent::Worker, move || {
+            let result = panic::catch_unwind(move || {
+                let _pctx = DbPanicContext::enter(panic_context);
+                function(world, parameters)
+            });
+            long_poll_task::<Request>(request, result, changes, default, on_cancelled)
+        });
+
+        self
+    }
+
     /// Formatting requests should never block on waiting a for task thread to open up, editors will wait
     /// on the response and a late formatting update might mess with the document and user.
     /// We can't run this on the main thread though as we invoke rustfmt which may take arbitrary time to complete!
@@ -221,17 +272,7 @@ impl<'global_state> RequestDispatcher<'global_state> {
                 let _pctx = DbPanicContext::enter(panic_context);
                 function(world, parameters)
             });
-            match thread_result_to_response::<R>(request.id.clone(), result) {
-                Ok(response) => Task::Response(response),
-                Err(_cancelled) if ALLOW_RETRYING => Task::Retry(request),
-                Err(_cancelled) => {
-                    let error = on_cancelled();
-                    Task::Response(Response {
-                        id: request.id,
-                        response_result: Err(error),
-                    })
-                },
-            }
+            response_task::<ALLOW_RETRYING, R>(request, result, on_cancelled)
         });
 
         self
@@ -321,6 +362,66 @@ impl fmt::Display for HandlerCancelledError {
     ) -> fmt::Result {
         write!(formatter, "Cancelled")
     }
+}
+
+/// The task that finishes `request` on the main loop, given what its handler
+/// returned or how it panicked. A request the database cancelled is retried
+/// when `ALLOW_RETRYING`, and otherwise answered with the `on_cancelled()`
+/// error. Any other outcome, a panic included, is converted to a response.
+fn response_task<const ALLOW_RETRYING: bool, R>(
+    request: ServerRequest,
+    result: thread::Result<anyhow::Result<R::Result>>,
+    on_cancelled: fn() -> ResponseError,
+) -> Task
+where
+    R: LspRequest,
+    R::Params: DeserializeOwned,
+    R::Result: Serialize,
+{
+    match thread_result_to_response::<R>(request.id.clone(), result) {
+        Ok(response) => Task::Response(response),
+        Err(_cancelled) if ALLOW_RETRYING => Task::Retry(request),
+        Err(_cancelled) => {
+            let error = on_cancelled();
+            Task::Response(Response {
+                id: request.id,
+                response_result: Err(error),
+            })
+        },
+    }
+}
+
+/// The task that finishes a long-polling `request` on the main loop. A
+/// suspended request becomes a [`Task::Suspend`], with `default()` as its
+/// "nothing changed" answer and `changes` as its change count at dispatch (see
+/// [`Suspended`]). Any other outcome goes through [`response_task`], without
+/// retrying.
+fn long_poll_task<R>(
+    request: ServerRequest,
+    result: thread::Result<anyhow::Result<LongPoll<R::Result>>>,
+    changes: u64,
+    default: fn() -> R::Result,
+    on_cancelled: fn() -> ResponseError,
+) -> Task
+where
+    R: LspRequest,
+    R::Params: DeserializeOwned,
+    R::Result: Serialize,
+{
+    let result = match result {
+        Ok(Ok(LongPoll::Suspend)) => {
+            let no_news = Response::new_ok(request.id.clone(), default());
+            return Task::Suspend(Suspended {
+                request,
+                no_news,
+                changes,
+            });
+        },
+        Ok(Ok(LongPoll::Respond(value))) => Ok(Ok(value)),
+        Ok(Err(error)) => Ok(Err(error)),
+        Err(panic) => Err(panic),
+    };
+    response_task::<false, R>(request, result, on_cancelled)
 }
 
 fn thread_result_to_response<R>(

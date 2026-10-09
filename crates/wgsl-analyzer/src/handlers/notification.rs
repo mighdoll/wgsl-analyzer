@@ -35,6 +35,8 @@ pub(crate) fn handle_cancel(
         Id::Int(id) => id.into(),
         Id::String(id) => id.into(),
     };
+    // A request held open by long polling must not run again once cancelled.
+    state.suspended_request.cancel(&id);
     state.cancel(id);
     Ok(())
 }

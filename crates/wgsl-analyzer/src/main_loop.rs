@@ -49,6 +49,7 @@ use crate::{
             handle_did_save_text_document,
         },
     },
+    long_poll::{Park, Suspended},
     lsp::{
         self, from_proto,
         utilities::{Progress, notification_is},
@@ -125,6 +126,9 @@ pub(crate) enum Task {
     Response(lsp_server::Response),
     DiscoverProject(DiscoverArgument),
     Retry(lsp_server::Request),
+    /// A long-polling handler had nothing new to report (see
+    /// [`crate::long_poll`]).
+    Suspend(Suspended),
     Diagnostics(DiagnosticsTaskKind),
     // DiscoverTest(lsp::ext::DiscoverTestResults),
     PrimeCaches(PrimeCachesProgress),
@@ -541,6 +545,9 @@ impl GlobalState {
             if project_or_mem_docs_changed && self.config.test_explorer() {
                 // self.update_tests();
             }
+            if project_or_mem_docs_changed {
+                self.wake_suspended_request();
+            }
 
             let current_revision = self.analysis_host.raw_database().nonce_and_revision().1;
             // no work is currently being done, now we can block a bit and clean up our garbage
@@ -726,6 +733,7 @@ impl GlobalState {
             Task::Response(response) => self.respond(response),
             Task::Retry(request) if !self.is_completed(&request) => self.on_request(request),
             Task::Retry(_) => (),
+            Task::Suspend(suspended) => self.park_request(suspended),
             Task::Diagnostics(kind) => {
                 self.diagnostics.set_native_diagnostics(kind);
             },
@@ -749,6 +757,43 @@ impl GlobalState {
                     self.load_package(load_task);
                 }
             },
+        }
+    }
+
+    /// Holds a long-polling request open until the server's state changes (see
+    /// [`crate::long_poll`]).
+    fn park_request(
+        &mut self,
+        suspended: Suspended,
+    ) {
+        // The client cancelled the request while its handler ran, and the request
+        // queue has answered it.
+        if self.is_completed(&suspended.request) {
+            return;
+        }
+        // The shutdown handler has already answered any parked request. Answer
+        // this one now too, so the client is not left waiting for it.
+        if self.shutdown_requested {
+            self.respond(suspended.no_news);
+            return;
+        }
+        match self.suspended_request.park(suspended) {
+            Park::Parked => (),
+            Park::Displaced(no_news) => self.respond(no_news),
+            Park::RunAgain(request) => self.on_request(request),
+        }
+    }
+
+    /// Runs the parked long-polling request again, if there is one, now that the
+    /// server's state has changed. Each wake costs one run of its handler, and a
+    /// handler that still finds nothing new suspends the request again. The
+    /// change is counted even when nothing is parked, so that a request whose
+    /// handler started before the change runs again instead of parking a stale
+    /// "nothing changed" (see
+    /// [`SuspendedRequest::park`](crate::long_poll::SuspendedRequest::park)).
+    pub(crate) fn wake_suspended_request(&mut self) {
+        if let Some(request) = self.suspended_request.wake() {
+            self.on_request(request);
         }
     }
 
@@ -934,6 +979,11 @@ impl GlobalState {
         };
         dispatcher.on_sync_mut::<ShutdownRequest>(|state, ()| {
             state.shutdown_requested = true;
+            // Answer a request held open by long polling, so the client is not
+            // left waiting for it.
+            if let Some(no_news) = state.suspended_request.give_up() {
+                state.respond(no_news);
+            }
             Ok(())
         });
 
@@ -974,7 +1024,7 @@ impl GlobalState {
                 handlers::request::empty_diagnostic_report,
                 handlers::request::diagnostic_pull_cancelled,
             )
-            .on_with_vfs_default::<WorkspaceDiagnosticRequest, _>(
+            .on_long_poll::<WorkspaceDiagnosticRequest>(
                 handlers::request::handle_workspace_diagnostics,
                 handlers::request::empty_workspace_diagnostics,
                 handlers::request::diagnostic_pull_cancelled,

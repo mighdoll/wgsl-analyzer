@@ -41,10 +41,11 @@ use lsp_types::{
 /// sends the id from its last workspace pull instead, and that id can stand for
 /// diagnostics VS Code no longer shows. Say the user fixed an error, so a
 /// document pull cleared it, then closed the file without saving, so the error
-/// is back on disk. If that last workspace pull ran while the file was open,
-/// its id differs from the closed file's. The next pull then answers *full*
-/// rather than *unchanged*, and the error reappears. The cost is one redundant
-/// full report each time a file with diagnostics closes.
+/// is back on disk. If that last workspace pull ran while the file was open
+/// (opening a file wakes a suspended pull), its id differs from the closed
+/// file's. The next pull then answers *full* rather than *unchanged*, and the
+/// error reappears. The cost is one redundant full report each time a file
+/// with diagnostics closes.
 ///
 /// `DefaultHasher::new()` is used rather than `FxHasher` because a collision here
 /// leaves stale diagnostics on the client, so fingerprint quality matters more

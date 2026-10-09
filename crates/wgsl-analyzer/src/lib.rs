@@ -11,6 +11,7 @@ pub mod emscripten_io;
 mod global_state;
 mod in_memory_documents;
 mod line_index;
+mod long_poll;
 pub mod lsp;
 pub mod main_loop;
 mod operation_queue;

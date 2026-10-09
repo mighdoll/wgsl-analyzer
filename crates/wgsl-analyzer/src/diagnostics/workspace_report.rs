@@ -16,7 +16,10 @@
 //! [`WorkspaceReportBuilder::finish`] then clears every previous id that no
 //! checked file claimed. An id goes unclaimed when its URI is unknown or
 //! excluded, or when it names a file the pull does not check (a closed library
-//! file, a non-shader file).
+//! file, a non-shader file). The exception is an open file that the pull skips
+//! (a non-shader file, or one with diagnostics disabled), which keeps its id
+//! until the file closes (`finish` says why). The exception is rare, since the
+//! pull checks every open shader file.
 //!
 //! A client that sends no `partialResultToken` gets every entry in the response
 //! (a bulk pull). A client that sends one (VS Code always does) gets the *full*
@@ -24,6 +27,11 @@
 //! can show them before the whole workspace is checked (see [`Streaming`]).
 //! Unchanged and cleared entries, and any full entries not yet sent, go in the
 //! response.
+//!
+//! A pull with nothing new for the client (every entry unchanged, or no entries
+//! at all, and no partial result sent) is not answered. The server suspends it
+//! and runs it again once the server's state changes (long polling, see
+//! [`crate::long_poll`]).
 //!
 //! The builder is modeled on how ty, Astral's Python type checker, answers
 //! workspace pulls. The comments below say which choices follow ty.
@@ -43,7 +51,7 @@ use rustc_hash::FxHashMap;
 use vfs::FileId;
 
 use super::result_id::result_id;
-use crate::lsp::utilities::PartialResultSender;
+use crate::{long_poll::LongPoll, lsp::utilities::PartialResultSender};
 
 /// Builds one `workspace/diagnostic` response from the client's previous ids and
 /// each checked file's diagnostics. Call [`Self::add_file`] once per checked
@@ -115,7 +123,20 @@ impl WorkspaceReportBuilder {
     }
 
     /// Clears every previous id that no checked file claimed, under the URI the
-    /// client sent, and returns the response.
+    /// client sent, and returns the response, or [`LongPoll::Suspend`] when the
+    /// pull has nothing new for the client. `version` gives a file's
+    /// open-document version, `None` when the file is not open.
+    ///
+    /// A previous id for an open file that the pull skips is not cleared until
+    /// the file closes. The pull checks every open shader file, so this covers
+    /// only an open file that is not WGSL or WESL, or one with diagnostics
+    /// disabled. When VS Code pulls an open file as a document, it ignores
+    /// workspace entries for the file and keeps sending the document pull's id.
+    /// Clearing that id would put a cleared entry in every pull, so no pull would
+    /// suspend, and the server would re-check the whole workspace every 2 s.
+    /// Sending nothing for the file also leaves the id VS Code holds from
+    /// workspace pulls in place, so once the file closes, the next pull (or a
+    /// suspended pull, which the close wakes) clears its diagnostics.
     ///
     /// In a streaming pull the response holds what was not sent as a partial
     /// result: the unchanged and cleared entries and the full entries still
@@ -123,18 +144,36 @@ impl WorkspaceReportBuilder {
     /// results has no result values. Like ty, `finish` departs from that rule.
     /// vscode-languageclient reports the response's entries the same way as a
     /// chunk's, so VS Code shows them.
-    pub(crate) fn finish(self) -> WorkspaceDiagnosticReport {
+    ///
+    /// A pull suspends when every entry is unchanged (or there are none) and no
+    /// partial result went out. A pull that sent one must be answered even if the
+    /// rest is unchanged, because a suspended pull runs again against the
+    /// `previousResultIds` it was sent with, which lack the ids the client took
+    /// from the chunks. A streamed file fixed before the re-run would have no
+    /// previous id there, so it would be omitted rather than cleared, and the
+    /// client would keep showing its old diagnostics.
+    pub(crate) fn finish(
+        self,
+        version: impl Fn(FileId) -> Option<i32>,
+    ) -> LongPoll<WorkspaceDiagnosticReport> {
         let mut items = self.items;
+        let mut sent_chunk = false;
         if let Some(streaming) = self.streaming {
+            sent_chunk = streaming.sent_chunk;
             items.extend(streaming.unsent);
         }
         let to_clear = self
             .previous
-            .into_values()
-            .map(|previous| previous.uri)
+            .into_iter()
+            .filter(|&(file_id, _)| version(file_id).is_none())
+            .map(|(_, previous)| previous.uri)
             .chain(self.unresolved);
         items.extend(to_clear.map(|uri| cleared_report(uri, None)));
-        WorkspaceDiagnosticReport { items }
+        if !sent_chunk && items.iter().all(is_unchanged) {
+            LongPoll::Suspend
+        } else {
+            LongPoll::Respond(WorkspaceDiagnosticReport { items })
+        }
     }
 }
 
@@ -173,6 +212,9 @@ pub(crate) struct Streaming {
     last_flush: Instant,
     /// Full entries not yet sent.
     unsent: Vec<WorkspaceDocumentDiagnosticReport>,
+    /// Whether a chunk has gone out, which rules out suspending the pull (see
+    /// [`WorkspaceReportBuilder::finish`]).
+    sent_chunk: bool,
 }
 
 impl Streaming {
@@ -185,6 +227,7 @@ impl Streaming {
             policy,
             last_flush: Instant::now(),
             unsent: Vec::new(),
+            sent_chunk: false,
         }
     }
 
@@ -203,6 +246,7 @@ impl Streaming {
             self.sender
                 .send(WorkspaceDiagnosticReportPartialResult { items });
             self.last_flush = Instant::now();
+            self.sent_chunk = true;
         }
     }
 }
@@ -216,6 +260,13 @@ const fn has_new_diagnostics(item: &WorkspaceDocumentDiagnosticReport) -> bool {
         },
         WorkspaceDocumentDiagnosticReport::WorkspaceUnchangedDocumentDiagnosticReport(_) => false,
     }
+}
+
+const fn is_unchanged(item: &WorkspaceDocumentDiagnosticReport) -> bool {
+    matches!(
+        item,
+        WorkspaceDocumentDiagnosticReport::WorkspaceUnchangedDocumentDiagnosticReport(_)
+    )
 }
 
 /// Decides the report for one checked file, given the client's previous id for it.
@@ -463,7 +514,7 @@ mod tests {
             None,
         );
         builder.add_file(checked, uri(SERVER_URI), None, items);
-        let report = builder.finish();
+        let report = builder.finish(|_| None).unwrap_respond();
 
         assert_eq!(
             sorted(report),
@@ -471,6 +522,52 @@ mod tests {
                 unchanged(SERVER_URI, None, id),
                 full("file:///ws/deleted.wgsl", None, None, Vec::new()),
                 full("file:///ws/skipped.wgsl", None, None, Vec::new()),
+            ]
+        );
+    }
+
+    /// A previous id for an open file the pull does not check (here a manifest)
+    /// is left alone. It does not stop a pull with nothing else new from
+    /// suspending, and a pull answered for another file does not clear it. Once
+    /// the file is closed, the id is cleared.
+    #[test]
+    fn an_open_file_the_pull_does_not_check_keeps_its_previous_id() {
+        const MANIFEST: &str = "file:///ws/Cargo.toml";
+        let checked = FileId::from_raw(0);
+        let manifest = FileId::from_raw(1);
+        let items = vec![diagnostic("unknown type")];
+        let id = result_id(&items, false).unwrap();
+        let resolve = |uri: &Uri| match uri.as_str() {
+            A_WGSL => Some(checked),
+            MANIFEST => Some(manifest),
+            _ => None,
+        };
+        let manifest_is_open = |file_id: FileId| (file_id == manifest).then_some(4);
+        let pull = |checked_items: Vec<Diagnostic>| {
+            let mut builder = WorkspaceReportBuilder::new(
+                vec![previous(A_WGSL, &id), previous(MANIFEST, "manifest-id")],
+                resolve,
+                None,
+            );
+            builder.add_file(checked, uri(A_WGSL), None, checked_items);
+            builder
+        };
+
+        assert_eq!(
+            pull(items.clone()).finish(manifest_is_open),
+            LongPoll::Suspend
+        );
+        assert_eq!(
+            pull(Vec::new()).finish(manifest_is_open),
+            LongPoll::Respond(WorkspaceDiagnosticReport {
+                items: vec![full(A_WGSL, None, None, Vec::new())]
+            })
+        );
+        assert_eq!(
+            sorted(pull(items).finish(|_| None).unwrap_respond()),
+            vec![
+                full(MANIFEST, None, None, Vec::new()),
+                unchanged(A_WGSL, None, id),
             ]
         );
     }
@@ -543,7 +640,7 @@ mod tests {
 
         builder.add_file(file(3), uri(D_WGSL), Some(5), Vec::new());
         builder.add_file(file(4), uri(E_WGSL), None, items.clone());
-        let report = builder.finish();
+        let report = builder.finish(|_| None).unwrap_respond();
         assert_eq!(chunks(&client), Vec::<serde_json::Value>::new());
         assert_eq!(
             sorted(report),
@@ -559,7 +656,8 @@ mod tests {
     /// The spec wants the first chunk to be a `WorkspaceDiagnosticReport` and
     /// the later ones `WorkspaceDiagnosticReportPartialResult`s. Both are
     /// `{"items": [...]}`, so this checks that each chunk parses as the type the
-    /// spec names for its position. Everything streamed, so the response is empty.
+    /// spec names for its position. Everything streamed, so the response is empty
+    /// (and still sent).
     #[test]
     fn chunks_parse_as_the_report_types_the_spec_names() {
         let items = vec![diagnostic("unknown type")];
@@ -568,7 +666,10 @@ mod tests {
         let mut builder = WorkspaceReportBuilder::new(Vec::new(), |_| None, Some(streaming));
         builder.add_file(FileId::from_raw(0), uri(A_WGSL), None, items.clone());
         builder.add_file(FileId::from_raw(1), uri(B_WGSL), None, items.clone());
-        assert_eq!(builder.finish(), WorkspaceDiagnosticReport::default());
+        assert_eq!(
+            builder.finish(|_| None),
+            LongPoll::Respond(WorkspaceDiagnosticReport::default())
+        );
 
         let chunks = chunks(&client);
         let [first, second] = chunks.as_slice() else {
@@ -601,6 +702,69 @@ mod tests {
             chunks(&client),
             [chunk(&[full(A_WGSL, None, Some(id), items)])]
         );
-        assert_eq!(builder.finish(), WorkspaceDiagnosticReport::default());
+        assert_eq!(
+            builder.finish(|_| None),
+            LongPoll::Respond(WorkspaceDiagnosticReport::default())
+        );
+    }
+
+    /// A pull whose entries are all unchanged, or that has none, suspends
+    /// (long polling), streaming or not. A cleared entry changes what the client
+    /// shows, so a pull with one is answered.
+    #[test]
+    fn a_pull_with_nothing_new_suspends() {
+        let items = vec![diagnostic("unknown type")];
+        let id = result_id(&items, false).unwrap();
+        let resolve = |uri: &Uri| (uri.as_str() == A_WGSL).then_some(FileId::from_raw(0));
+
+        let mut bulk = WorkspaceReportBuilder::new(vec![previous(A_WGSL, &id)], resolve, None);
+        bulk.add_file(FileId::from_raw(0), uri(A_WGSL), None, items.clone());
+        bulk.add_file(FileId::from_raw(1), uri(B_WGSL), None, Vec::new());
+        assert_eq!(bulk.finish(|_| None), LongPoll::Suspend);
+
+        let (streaming, client) = streaming(FlushPolicy::Count(1));
+        let mut streamed =
+            WorkspaceReportBuilder::new(vec![previous(A_WGSL, &id)], resolve, Some(streaming));
+        streamed.add_file(FileId::from_raw(0), uri(A_WGSL), None, items);
+        assert_eq!(streamed.finish(|_| None), LongPoll::Suspend);
+        assert_eq!(chunks(&client), Vec::<serde_json::Value>::new());
+
+        let empty = WorkspaceReportBuilder::new(Vec::new(), |_| None, None);
+        assert_eq!(empty.finish(|_| None), LongPoll::Suspend);
+
+        let cleared =
+            WorkspaceReportBuilder::new(vec![previous(B_WGSL, "deleted-id")], |_| None, None);
+        assert_eq!(
+            cleared.finish(|_| None),
+            LongPoll::Respond(WorkspaceDiagnosticReport {
+                items: vec![full(B_WGSL, None, None, Vec::new())]
+            })
+        );
+    }
+
+    /// A pull that sent a chunk is answered even though the rest is unchanged.
+    /// Suspended, it would run again against the previous ids it was sent with,
+    /// which lack the ids the client took from the chunk.
+    #[test]
+    fn a_pull_that_sent_a_chunk_is_answered() {
+        let items = vec![diagnostic("unknown type")];
+        let id = result_id(&items, false).unwrap();
+        let resolve = |uri: &Uri| (uri.as_str() == B_WGSL).then_some(FileId::from_raw(1));
+        let (streaming, client) = streaming(FlushPolicy::Count(1));
+        let mut builder =
+            WorkspaceReportBuilder::new(vec![previous(B_WGSL, &id)], resolve, Some(streaming));
+        builder.add_file(FileId::from_raw(0), uri(A_WGSL), None, items.clone());
+        builder.add_file(FileId::from_raw(1), uri(B_WGSL), None, items.clone());
+
+        assert_eq!(
+            chunks(&client),
+            [chunk(&[full(A_WGSL, None, Some(id.clone()), items)])]
+        );
+        assert_eq!(
+            builder.finish(|_| None),
+            LongPoll::Respond(WorkspaceDiagnosticReport {
+                items: vec![unchanged(B_WGSL, None, id)]
+            })
+        );
     }
 }

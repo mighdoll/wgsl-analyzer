@@ -27,6 +27,7 @@ use crate::{
         workspace_report::{FlushPolicy, Streaming, WorkspaceReportBuilder},
     },
     global_state::GlobalStateSnapshot,
+    long_poll::LongPoll,
     lsp::{
         self,
         extensions::{
@@ -401,8 +402,10 @@ fn pull_diagnostics(
     publish_diagnostics(snap, &config, file_id).map(Some)
 }
 
-/// The `workspace/diagnostic` report while the VFS is still loading. It has no
-/// items, so the client keeps the diagnostics it has until a later pull.
+/// The `workspace/diagnostic` report while the VFS is still loading, and for a
+/// suspended pull the server gives up on (one displaced by a newer pull, or one
+/// still suspended at shutdown). It has no items, so the client keeps the diagnostics it
+/// has until a later pull.
 pub(crate) fn empty_workspace_diagnostics() -> WorkspaceDiagnosticReport {
     WorkspaceDiagnosticReport::default()
 }
@@ -411,11 +414,13 @@ pub(crate) fn empty_workspace_diagnostics() -> WorkspaceDiagnosticReport {
 /// open one (see [`GlobalStateSnapshot::workspace_shader_files`]), and reports
 /// what changed since the client's previous result ids (see
 /// [`crate::diagnostics::workspace_report`]). With a `partialResultToken`, files
-/// with new diagnostics stream to the client while the check runs.
+/// with new diagnostics stream to the client while the check runs. When nothing
+/// is new for the client, the pull is suspended rather than answered (long
+/// polling, see [`crate::long_poll`]).
 pub(crate) fn handle_workspace_diagnostics(
     snap: GlobalStateSnapshot,
     parameters: WorkspaceDiagnosticParams,
-) -> anyhow::Result<WorkspaceDiagnosticReport> {
+) -> anyhow::Result<LongPoll<WorkspaceDiagnosticReport>> {
     workspace_diagnostics(&snap, parameters, FlushPolicy::SERVER)
 }
 
@@ -425,7 +430,7 @@ pub(crate) fn workspace_diagnostics(
     snap: &GlobalStateSnapshot,
     parameters: WorkspaceDiagnosticParams,
     flush: FlushPolicy,
-) -> anyhow::Result<WorkspaceDiagnosticReport> {
+) -> anyhow::Result<LongPoll<WorkspaceDiagnosticReport>> {
     let _p = tracing::info_span!("handle_workspace_diagnostics").entered();
     let streaming = parameters
         .partial_result_params
@@ -438,7 +443,8 @@ pub(crate) fn workspace_diagnostics(
     );
     for file_id in snap.workspace_shader_files()? {
         // A file with diagnostics disabled reports nothing, so a previous id for
-        // it is cleared.
+        // it is cleared (once the file is closed, see
+        // `WorkspaceReportBuilder::finish`).
         let Some(items) = pull_diagnostics(snap, file_id)? else {
             continue;
         };
@@ -446,7 +452,7 @@ pub(crate) fn workspace_diagnostics(
         let version = snap.file_version(file_id);
         report.add_file(file_id, uri, version, items);
     }
-    Ok(report.finish())
+    Ok(report.finish(|file_id| snap.file_version(file_id)))
 }
 
 /// The error a diagnostic pull (document or workspace) answers with when a
