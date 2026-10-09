@@ -14,7 +14,7 @@ use crossbeam_channel::{Receiver, select};
 use lsp_server::{Connection, Notification, Request};
 use lsp_types::{
     CancelNotification, CodeLensRefreshRequest, CompletionRequest, DefinitionRequest, Diagnostic,
-    DiagnosticRefreshRequest, DiagnosticServerCancellationData, DidChangeConfigurationNotification,
+    DiagnosticRefreshRequest, DidChangeConfigurationNotification,
     DidChangeTextDocumentNotification, DidChangeWatchedFilesNotification,
     DidChangeWorkspaceFoldersNotification, DidCloseTextDocumentNotification,
     DidOpenTextDocumentNotification, DidSaveTextDocumentNotification, DocumentDiagnosticRequest,
@@ -24,6 +24,7 @@ use lsp_types::{
     SemanticTokensRefreshRequest, ShutdownRequest, SignatureHelpRequest,
     TextDocumentContentRequest, TextDocumentFilter, TextDocumentFilterPattern,
     TextDocumentRegistrationOptions, TextDocumentSaveRegistrationOptions, Uri,
+    WorkspaceDiagnosticRequest,
 };
 use project_model::{PackageKey, ProjectManifest};
 use salsa::{Cancelled, Durability};
@@ -971,18 +972,12 @@ impl GlobalState {
             .on_with_vfs_default::<DocumentDiagnosticRequest, _>(
                 handlers::request::handle_document_diagnostics,
                 handlers::request::empty_diagnostic_report,
-                || lsp_server::ResponseError {
-                    #[expect(
-                        clippy::as_conversions,
-                        reason = "lsp_server sets this to the JSON RPC value"
-                    )]
-                    code: lsp_server::ErrorCode::ServerCancelled as i32,
-                    message: "server cancelled the request".to_owned(),
-                    data: serde_json::to_value(DiagnosticServerCancellationData {
-                        retrigger_request: true,
-                    })
-                    .ok(),
-                },
+                handlers::request::diagnostic_pull_cancelled,
+            )
+            .on_with_vfs_default::<WorkspaceDiagnosticRequest, _>(
+                handlers::request::handle_workspace_diagnostics,
+                handlers::request::empty_workspace_diagnostics,
+                handlers::request::diagnostic_pull_cancelled,
             )
             .on::<RETRY, TextDocumentContentRequest>(
                 handlers::request::handle_text_document_content,

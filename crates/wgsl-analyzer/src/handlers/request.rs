@@ -9,11 +9,12 @@ use ide::{Cancellable, HoverAction, HoverGotoTypeData};
 use ide_diagnostics::DiagnosticsConfig;
 use lsp_types::{
     CompletionList, CompletionParams, CompletionResponse, Contents, Definition, DefinitionParams,
-    DefinitionResponse, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity,
-    DiagnosticTag, DocumentDiagnosticParams, DocumentDiagnosticReport, DocumentFormattingParams,
-    FoldingRange, FoldingRangeParams, Hover, InlayHint, InlayHintParams, MarkupContent, MarkupKind,
-    Range, RelatedFullDocumentDiagnosticReport, SignatureHelp, SignatureHelpParams,
-    TextDocumentContentParams, TextDocumentContentResult, TextDocumentIdentifier, TextEdit,
+    DefinitionResponse, Diagnostic, DiagnosticRelatedInformation, DiagnosticServerCancellationData,
+    DiagnosticSeverity, DiagnosticTag, DocumentDiagnosticParams, DocumentDiagnosticReport,
+    DocumentFormattingParams, FoldingRange, FoldingRangeParams, Hover, InlayHint, InlayHintParams,
+    MarkupContent, MarkupKind, Range, RelatedFullDocumentDiagnosticReport, SignatureHelp,
+    SignatureHelpParams, TextDocumentContentParams, TextDocumentContentResult,
+    TextDocumentIdentifier, TextEdit, WorkspaceDiagnosticParams, WorkspaceDiagnosticReport,
 };
 use stdx::format_to;
 use vfs::{AbsPath, FileId};
@@ -22,6 +23,7 @@ use crate::{
     Result,
     diagnostics::{
         convert_diagnostic, convert_related_information, result_id::document_diagnostic_report,
+        workspace_report::WorkspaceReportBuilder,
     },
     global_state::GlobalStateSnapshot,
     lsp::{
@@ -376,16 +378,75 @@ pub(crate) fn handle_document_diagnostics(
     if !snap.has_text(file_id) {
         return Ok(empty_diagnostic_report());
     }
-    let source_root = snap.analysis.source_root_id(file_id).ok();
-    let config = snap.config.diagnostics(source_root);
-
-    if !config.enabled {
+    let Some(items) = pull_diagnostics(&snap, file_id)? else {
         return Ok(empty_diagnostic_report());
-    }
-
-    let items = publish_diagnostics(&snap, &config, file_id)?;
+    };
     let previous_result_id = parameters.previous_result_id.as_deref();
     Ok(document_diagnostic_report(items, previous_result_id))
+}
+
+/// The LSP diagnostics a pull (document or workspace) reports for `file_id`,
+/// under the configuration of the file's source root. `None` when diagnostics
+/// are disabled there, so that the file reports nothing.
+fn pull_diagnostics(
+    snap: &GlobalStateSnapshot,
+    file_id: FileId,
+) -> anyhow::Result<Option<Vec<Diagnostic>>> {
+    let source_root = snap.analysis.source_root_id(file_id)?;
+    let config = snap.config.diagnostics(Some(source_root));
+    if !config.enabled {
+        return Ok(None);
+    }
+    publish_diagnostics(snap, &config, file_id).map(Some)
+}
+
+/// The `workspace/diagnostic` report while the VFS is still loading. It has no
+/// items, so the client keeps the diagnostics it has until a later pull.
+pub(crate) fn empty_workspace_diagnostics() -> WorkspaceDiagnosticReport {
+    WorkspaceDiagnosticReport::default()
+}
+
+/// Checks every shader file in the workspace's local source roots and every
+/// open one (see [`GlobalStateSnapshot::workspace_shader_files`]), and reports
+/// what changed since the client's previous result ids (see
+/// [`crate::diagnostics::workspace_report`]).
+pub(crate) fn handle_workspace_diagnostics(
+    snap: GlobalStateSnapshot,
+    parameters: WorkspaceDiagnosticParams,
+) -> anyhow::Result<WorkspaceDiagnosticReport> {
+    let _p = tracing::info_span!("handle_workspace_diagnostics").entered();
+    let mut report = WorkspaceReportBuilder::new(parameters.previous_result_ids, |uri| {
+        snap.url_to_file_id(uri).ok().flatten()
+    });
+    for file_id in snap.workspace_shader_files()? {
+        // A file with diagnostics disabled reports nothing, so a previous id for
+        // it is cleared.
+        let Some(items) = pull_diagnostics(&snap, file_id)? else {
+            continue;
+        };
+        let uri = snap.file_id_to_url(file_id);
+        let version = snap.file_version(file_id);
+        report.add_file(file_id, uri, version, items);
+    }
+    Ok(report.finish())
+}
+
+/// The error a diagnostic pull (document or workspace) answers with when a
+/// change cancels it mid-computation. `retriggerRequest` asks the client to pull
+/// again rather than report a failure.
+pub(crate) fn diagnostic_pull_cancelled() -> lsp_server::ResponseError {
+    lsp_server::ResponseError {
+        #[expect(
+            clippy::as_conversions,
+            reason = "lsp_server sets this to the JSON RPC value"
+        )]
+        code: lsp_server::ErrorCode::ServerCancelled as i32,
+        message: "server cancelled the request".to_owned(),
+        data: serde_json::to_value(DiagnosticServerCancellationData {
+            retrigger_request: true,
+        })
+        .ok(),
+    }
 }
 
 pub(crate) fn handle_inlay_hints(

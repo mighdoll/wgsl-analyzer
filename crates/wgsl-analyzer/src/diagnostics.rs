@@ -2,6 +2,7 @@
 
 // pub(crate) mod to_proto;
 pub(crate) mod result_id;
+pub(crate) mod workspace_report;
 
 use std::{mem, ops};
 

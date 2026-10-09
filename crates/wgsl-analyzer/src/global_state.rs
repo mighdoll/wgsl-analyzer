@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use base_db::{
-    SourceDatabase as _,
+    FileExtension, SourceDatabase as _,
     change::Change as BaseDbChange,
     input::{Dependency, PackageData, PackageName},
 };
@@ -14,7 +14,7 @@ use lsp_types::{
 };
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use project_model::{ManifestPath, PackageChange, PackageGraph, PackageKey};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Revision;
 use tracing::Level;
 use triomphe::Arc;
@@ -615,6 +615,53 @@ impl GlobalStateSnapshot {
         file_id: FileId,
     ) -> bool {
         self.vfs.read().1.contains_key(&file_id)
+    }
+
+    /// The files a `workspace/diagnostic` pull checks: WGSL and WESL files in
+    /// local (non-library) source roots, plus every open WGSL or WESL file, in
+    /// `FileId` order.
+    ///
+    /// The VFS also holds `.toml` manifests, which are not checked. Files
+    /// outside every package root land in a library source root, and are
+    /// checked only while open. Files without line endings are skipped, for the
+    /// reason in [`Self::has_text`].
+    ///
+    /// Open library files are checked because of how VS Code clears a closed
+    /// file. Once VS Code pulls workspace diagnostics, it no longer clears a
+    /// file's diagnostics when the file closes, and leaves that to a workspace
+    /// pull. It also sends result ids only for files a workspace pull has
+    /// reported. So the pull reports an open dependency file (opened by go to
+    /// definition, say), and the first pull after the file closes clears its
+    /// diagnostics, since that pull no longer checks the file
+    /// (`WorkspaceReportBuilder::finish`).
+    pub(crate) fn workspace_shader_files(&self) -> Cancellable<Vec<FileId>> {
+        let guard = self.vfs.read();
+        let (vfs, line_endings) = &*guard;
+        let with_text: Vec<FileId> = vfs
+            .iter()
+            .map(|(file_id, _)| file_id)
+            .filter(|file_id| line_endings.contains_key(file_id))
+            .collect();
+        let open: FxHashSet<FileId> = self
+            .in_memory_documents
+            .iter()
+            .filter_map(|path| match vfs.file_id(path)? {
+                (file_id, FileExcluded::No) => Some(file_id),
+                (_, FileExcluded::Yes) => None,
+            })
+            .collect();
+        drop(guard);
+        self.analysis.with_db(|db| {
+            with_text
+                .into_iter()
+                .filter(|&file_id| {
+                    let source_root_id = db.file_source_root(file_id).source_root_id(db);
+                    let source_root = db.source_root(source_root_id).source_root(db);
+                    (open.contains(&file_id) || !source_root.is_library())
+                        && FileExtension::from_file(&source_root, file_id).is_ok()
+                })
+                .collect()
+        })
     }
 }
 

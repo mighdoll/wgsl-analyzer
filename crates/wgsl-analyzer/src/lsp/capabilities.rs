@@ -135,8 +135,7 @@ pub fn server_capabilities(config: &Config) -> ServerCapabilities {
         diagnostic_provider: Some(DiagnosticProvider::DiagnosticOptions(DiagnosticOptions {
             identifier: Some("wgsl-analyzer".to_owned()),
             inter_file_dependencies: true,
-            // FIXME
-            workspace_diagnostics: false,
+            workspace_diagnostics: true,
             work_done_progress_options: WorkDoneProgressOptions {
                 work_done_progress: None,
             },
