@@ -124,18 +124,7 @@ impl<'global_state> RequestDispatcher<'global_state> {
                 Result: Serialize + Default,
             > + 'static,
     {
-        if !self.global_state.vfs_done {
-            if let Some(ServerRequest {
-                id,
-                method: _,
-                params: _,
-            }) = self
-                .request
-                .take_if(|request| request.method.as_str() == Request::METHOD.as_str())
-            {
-                self.global_state
-                    .respond(Response::new_ok(id, Request::Result::default()));
-            }
+        if self.answered_while_vfs_loads::<Request>(Request::Result::default) {
             return self;
         }
         self.on_with_thread_intent::<false, ALLOW_RETRYING, Request>(
@@ -160,17 +149,7 @@ impl<'global_state> RequestDispatcher<'global_state> {
             > + 'static,
         GetDefault: FnOnce() -> Request::Result,
     {
-        if !self.global_state.vfs_done {
-            if let Some(ServerRequest {
-                id,
-                method: _,
-                params: _,
-            }) = self
-                .request
-                .take_if(|request| request.method.as_str() == Request::METHOD.as_str())
-            {
-                self.global_state.respond(Response::new_ok(id, default()));
-            }
+        if self.answered_while_vfs_loads::<Request>(default) {
             return self;
         }
         self.on_with_thread_intent::<false, false, Request>(
@@ -256,6 +235,29 @@ impl<'global_state> RequestDispatcher<'global_state> {
         });
 
         self
+    }
+
+    /// While the VFS is loading, answers an `R` request with `default()` instead
+    /// of running its handler. Returns whether the VFS is loading, in which case
+    /// the caller dispatches nothing.
+    fn answered_while_vfs_loads<R>(
+        &mut self,
+        default: impl FnOnce() -> R::Result,
+    ) -> bool
+    where
+        R: LspRequest<Result: Serialize>,
+    {
+        if self.global_state.vfs_done {
+            return false;
+        }
+        let request = self
+            .request
+            .take_if(|request| request.method.as_str() == R::METHOD.as_str());
+        if let Some(request) = request {
+            let response = Response::new_ok(request.id, default());
+            self.global_state.respond(response);
+        }
+        true
     }
 
     fn parse<R>(&mut self) -> Option<(ServerRequest, R::Params, String)>
