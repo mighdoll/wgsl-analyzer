@@ -69,6 +69,19 @@ pub(crate) struct GlobalState {
 
     // VFS
     pub(crate) loader: HandleReceiver<Box<dyn Handle>, Receiver<vfs::loader::Message>>,
+    /// The VFS, plus the line endings of each file whose text `process_changes`
+    /// has applied to the database.
+    ///
+    /// Snapshots share this lock with the main loop instead of copying the VFS,
+    /// so the VFS can hold files that a snapshot's database has never seen. A
+    /// line endings entry guards against that. `process_changes` records an
+    /// entry only after `apply_change`, which waits until every older snapshot
+    /// is dropped. So a snapshot that finds a file's line endings can look the
+    /// file up in its database.
+    ///
+    /// A file whose text is not valid UTF-8 gets no entry. If the file had valid
+    /// text before, it keeps the old entry. That is harmless, because the
+    /// database then holds empty text for the file.
     pub(crate) vfs: Arc<RwLock<(Vfs, FxHashMap<FileId, LineEndings>)>>,
     pub(crate) vfs_config_version: u32,
     pub(crate) vfs_progress_config_version: u32,
@@ -223,9 +236,11 @@ impl GlobalState {
             FxHashMap::default();
 
         let mut change = BaseDbChange::new();
+        // Line endings to record once the database has the text (see `Self::vfs`).
+        let mut new_line_endings = Vec::new();
         // VFS changes
         let mut guard = self.vfs.write();
-        let (vfs, line_endings_map) = &mut *guard;
+        let vfs = &mut guard.0;
 
         let changed_files = vfs.take_changes();
 
@@ -258,7 +273,7 @@ impl GlobalState {
                         // FIXME: Consider doing normalization in the `vfs` instead? That allows
                         // getting rid of some locking
                         let (text, line_endings) = LineEndings::normalize(text);
-                        line_endings_map.insert(file.file_id, line_endings);
+                        new_line_endings.push((file.file_id, line_endings));
                         text
                     })
                 } else {
@@ -284,11 +299,13 @@ impl GlobalState {
         }
 
         if change.is_empty() {
-            false
-        } else {
-            self.analysis_host.apply_change(change);
-            true
+            return false;
         }
+        // Waits until every older snapshot is dropped, so none of them can see the
+        // line endings recorded below.
+        self.analysis_host.apply_change(change);
+        self.vfs.write().1.extend(new_line_endings);
+        true
     }
 
     fn process_local_package_changes(
@@ -587,6 +604,17 @@ impl GlobalStateSnapshot {
                 .get(self.vfs_read().file_path(file_id))?
                 .version,
         )
+    }
+
+    /// Whether this snapshot's database has the file's text, so that looking the
+    /// file up there, or building its line index, cannot panic. False for a file
+    /// in the VFS whose text `process_changes` has not applied yet, and for a file
+    /// whose text has never been valid UTF-8 (see [`GlobalState::vfs`]).
+    pub(crate) fn has_text(
+        &self,
+        file_id: FileId,
+    ) -> bool {
+        self.vfs.read().1.contains_key(&file_id)
     }
 }
 

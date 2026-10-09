@@ -374,6 +374,9 @@ pub(crate) fn handle_document_diagnostics(
     let Some(file_id) = from_proto::file_id(&snap, &parameters.text_document.uri)? else {
         return Ok(empty_diagnostic_report());
     };
+    if !snap.has_text(file_id) {
+        return Ok(empty_diagnostic_report());
+    }
     let source_root = snap.analysis.source_root_id(file_id).ok();
     let config = snap.config.diagnostics(source_root);
 
