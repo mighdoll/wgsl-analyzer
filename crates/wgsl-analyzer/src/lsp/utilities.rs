@@ -1,14 +1,15 @@
 //! Utilities for LSP-related boilerplate code.
-use std::{error::Error, mem, ops::Range};
+use std::{error::Error, marker::PhantomData, mem, ops::Range};
 
+use crossbeam_channel::Sender;
 use lsp_server::{ErrorCode, Notification as ServerNotification, Response};
 use lsp_types::{
     CompletionItem, CompletionItemTextEdit, MessageActionItem, MessageType,
     Notification as LspNotification, ProgressNotification, ProgressParams, ProgressToken,
-    Request as _, ShowMessageNotification, ShowMessageParams, ShowMessageRequest,
-    ShowMessageRequestParams, TextDocumentContentChangeEvent, TextEdit, WorkDoneProgressBegin,
-    WorkDoneProgressCreateParams, WorkDoneProgressCreateRequest, WorkDoneProgressEnd,
-    WorkDoneProgressReport,
+    Request as _, RequestWithPartialResults, ShowMessageNotification, ShowMessageParams,
+    ShowMessageRequest, ShowMessageRequestParams, TextDocumentContentChangeEvent, TextEdit,
+    WorkDoneProgressBegin, WorkDoneProgressCreateParams, WorkDoneProgressCreateRequest,
+    WorkDoneProgressEnd, WorkDoneProgressReport,
 };
 use triomphe::Arc;
 
@@ -52,6 +53,49 @@ impl Progress {
     ) -> f64 {
         assert!(done <= total);
         done as f64 / total.max(1) as f64
+    }
+}
+
+/// Sends partial results for one request of type `R`: each chunk goes to the
+/// client as a `$/progress` notification under the `partialResultToken` from the
+/// request's parameters.
+///
+/// Chunks go straight onto the connection from the handler's worker thread. The
+/// response goes through the main loop after the handler returns, so every chunk
+/// reaches the client before the response (vscode-languageclient stops listening
+/// for the token once the response arrives).
+pub(crate) struct PartialResultSender<R> {
+    sender: Sender<lsp_server::Message>,
+    token: ProgressToken,
+    request: PhantomData<fn() -> R>,
+}
+
+impl<R: RequestWithPartialResults> PartialResultSender<R> {
+    pub(crate) const fn new(
+        sender: Sender<lsp_server::Message>,
+        token: ProgressToken,
+    ) -> Self {
+        Self {
+            sender,
+            token,
+            request: PhantomData,
+        }
+    }
+
+    pub(crate) fn send(
+        &self,
+        chunk: R::PartialResult,
+    ) {
+        let notification = ServerNotification::new(
+            ProgressNotification::METHOD.to_string(),
+            ProgressParams {
+                token: self.token.clone(),
+                value: serde_json::to_value(chunk).unwrap(),
+            },
+        );
+        // This fails only once the connection's writer thread has exited, and then
+        // the client cannot be told anything.
+        drop(self.sender.send(notification.into()));
     }
 }
 

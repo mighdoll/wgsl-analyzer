@@ -22,8 +22,9 @@ use vfs::{AbsPath, FileId};
 use crate::{
     Result,
     diagnostics::{
-        convert_diagnostic, convert_related_information, result_id::document_diagnostic_report,
-        workspace_report::WorkspaceReportBuilder,
+        convert_diagnostic, convert_related_information,
+        result_id::document_diagnostic_report,
+        workspace_report::{FlushPolicy, Streaming, WorkspaceReportBuilder},
     },
     global_state::GlobalStateSnapshot,
     lsp::{
@@ -409,19 +410,36 @@ pub(crate) fn empty_workspace_diagnostics() -> WorkspaceDiagnosticReport {
 /// Checks every shader file in the workspace's local source roots and every
 /// open one (see [`GlobalStateSnapshot::workspace_shader_files`]), and reports
 /// what changed since the client's previous result ids (see
-/// [`crate::diagnostics::workspace_report`]).
+/// [`crate::diagnostics::workspace_report`]). With a `partialResultToken`, files
+/// with new diagnostics stream to the client while the check runs.
 pub(crate) fn handle_workspace_diagnostics(
     snap: GlobalStateSnapshot,
     parameters: WorkspaceDiagnosticParams,
 ) -> anyhow::Result<WorkspaceDiagnosticReport> {
+    workspace_diagnostics(&snap, parameters, FlushPolicy::SERVER)
+}
+
+/// [`handle_workspace_diagnostics`] with the streaming [`FlushPolicy`] as a
+/// parameter, so that tests can stream without depending on the clock.
+pub(crate) fn workspace_diagnostics(
+    snap: &GlobalStateSnapshot,
+    parameters: WorkspaceDiagnosticParams,
+    flush: FlushPolicy,
+) -> anyhow::Result<WorkspaceDiagnosticReport> {
     let _p = tracing::info_span!("handle_workspace_diagnostics").entered();
-    let mut report = WorkspaceReportBuilder::new(parameters.previous_result_ids, |uri| {
-        snap.url_to_file_id(uri).ok().flatten()
-    });
+    let streaming = parameters
+        .partial_result_params
+        .partial_result_token
+        .map(|token| Streaming::new(snap.partial_result_sender(token), flush));
+    let mut report = WorkspaceReportBuilder::new(
+        parameters.previous_result_ids,
+        |uri| snap.url_to_file_id(uri).ok().flatten(),
+        streaming,
+    );
     for file_id in snap.workspace_shader_files()? {
         // A file with diagnostics disabled reports nothing, so a previous id for
         // it is cleared.
-        let Some(items) = pull_diagnostics(&snap, file_id)? else {
+        let Some(items) = pull_diagnostics(snap, file_id)? else {
             continue;
         };
         let uri = snap.file_id_to_url(file_id);

@@ -9,8 +9,9 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use ide::{Analysis, AnalysisHost, Cancellable};
 use lsp_server::{Notification as ServerNotification, Request as ServerRequest};
 use lsp_types::{
-    Diagnostic, MarkupContent, Notification as LspNotification, PublishDiagnosticsNotification,
-    PublishDiagnosticsParams, Request as LspRequest, Uri,
+    Diagnostic, MarkupContent, Notification as LspNotification, ProgressToken,
+    PublishDiagnosticsNotification, PublishDiagnosticsParams, Request as LspRequest,
+    RequestWithPartialResults, Uri,
 };
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use project_model::{ManifestPath, PackageChange, PackageGraph, PackageKey};
@@ -27,7 +28,7 @@ use crate::{
     discover::{self, DiscoverArgument},
     in_memory_documents::InMemoryDocuments,
     line_index::{LineEndings, LineIndex},
-    lsp::{from_proto, to_proto},
+    lsp::{from_proto, to_proto, utilities::PartialResultSender},
     main_loop::Task,
     operation_queue::{Cause, OperationQueue},
     reload::SourceRootConfig,
@@ -127,6 +128,9 @@ pub(crate) struct GlobalStateSnapshot {
     vfs: Arc<RwLock<(Vfs, FxHashMap<FileId, LineEndings>)>>,
     // pub(crate) packages: Arc<[Package]>,
     // pub(crate) flycheck: Arc<[FlycheckHandle]>,
+    /// The connection to the client, for handlers that send partial results (see
+    /// [`GlobalStateSnapshot::partial_result_sender`]).
+    sender: Sender<lsp_server::Message>,
 }
 
 impl std::panic::UnwindSafe for GlobalStateSnapshot {}
@@ -400,6 +404,7 @@ impl GlobalState {
             analysis: self.analysis_host.analysis(),
             in_memory_documents: self.in_memory_documents.clone(),
             vfs: Arc::clone(&self.vfs),
+            sender: self.sender.clone(),
             // check_fixes: Arc::clone(&self.diagnostics.check_fixes),
             // packages: Arc::clone(&self.packages),
             // semantic_tokens_cache: Arc::clone(&self.semantic_tokens_cache),
@@ -593,6 +598,18 @@ impl GlobalStateSnapshot {
             encoding: self.config.client_capabilities().negotiated_encoding(),
         };
         Ok(result)
+    }
+
+    /// Returns a sender of partial results for a request of type `R`, under the
+    /// `partialResultToken` the client put in the request's parameters.
+    pub(crate) fn partial_result_sender<R>(
+        &self,
+        token: ProgressToken,
+    ) -> PartialResultSender<R>
+    where
+        R: RequestWithPartialResults,
+    {
+        PartialResultSender::new(self.sender.clone(), token)
     }
 
     pub(crate) fn file_version(

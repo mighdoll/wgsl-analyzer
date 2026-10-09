@@ -18,18 +18,32 @@
 //! excluded, or when it names a file the pull does not check (a closed library
 //! file, a non-shader file).
 //!
+//! A client that sends no `partialResultToken` gets every entry in the response
+//! (a bulk pull). A client that sends one (VS Code always does) gets the *full*
+//! entries with new diagnostics as partial results while the pull runs, so it
+//! can show them before the whole workspace is checked (see [`Streaming`]).
+//! Unchanged and cleared entries, and any full entries not yet sent, go in the
+//! response.
+//!
 //! The builder is modeled on how ty, Astral's Python type checker, answers
 //! workspace pulls. The comments below say which choices follow ty.
 
+use std::{
+    mem,
+    time::{Duration, Instant},
+};
+
 use lsp_types::{
     Diagnostic, FullDocumentDiagnosticReport, PreviousResultId, UnchangedDocumentDiagnosticReport,
-    Uri, WorkspaceDiagnosticReport, WorkspaceDocumentDiagnosticReport,
+    Uri, WorkspaceDiagnosticReport, WorkspaceDiagnosticReportPartialResult,
+    WorkspaceDiagnosticRequest, WorkspaceDocumentDiagnosticReport,
     WorkspaceFullDocumentDiagnosticReport, WorkspaceUnchangedDocumentDiagnosticReport,
 };
 use rustc_hash::FxHashMap;
 use vfs::FileId;
 
 use super::result_id::result_id;
+use crate::lsp::utilities::PartialResultSender;
 
 /// Builds one `workspace/diagnostic` response from the client's previous ids and
 /// each checked file's diagnostics. Call [`Self::add_file`] once per checked
@@ -43,16 +57,20 @@ pub(crate) struct WorkspaceReportBuilder {
     previous: FxHashMap<FileId, PreviousResultId>,
     /// URIs of previous ids that do not name a known, non-excluded file.
     unresolved: Vec<Uri>,
-    /// Entries for the response.
+    /// Entries for the response: all of them in a bulk pull, and the unchanged
+    /// and cleared ones in a streaming pull.
     items: Vec<WorkspaceDocumentDiagnosticReport>,
+    /// Present when the client sent a `partialResultToken`.
+    streaming: Option<Streaming>,
 }
 
 impl WorkspaceReportBuilder {
     /// `resolve` maps a client URI to its file, or returns `None` when the file
-    /// is unknown or excluded.
+    /// is unknown or excluded. `streaming` is `None` for a bulk pull.
     pub(crate) fn new(
         previous_result_ids: Vec<PreviousResultId>,
         mut resolve: impl FnMut(&Uri) -> Option<FileId>,
+        streaming: Option<Streaming>,
     ) -> Self {
         let mut previous = FxHashMap::default();
         let mut unresolved = Vec::new();
@@ -68,11 +86,13 @@ impl WorkspaceReportBuilder {
             previous,
             unresolved,
             items: Vec::new(),
+            streaming,
         }
     }
 
-    /// Records one checked file. `uri` is the server's URI for the file and
-    /// `version` its open-document version, if it is open.
+    /// Records one checked file, and in a streaming pull sends the buffered
+    /// entries as a chunk if one is due. `uri` is the server's URI for the file
+    /// and `version` its open-document version, if it is open.
     pub(crate) fn add_file(
         &mut self,
         file_id: FileId,
@@ -82,14 +102,32 @@ impl WorkspaceReportBuilder {
     ) {
         let previous = self.previous.remove(&file_id);
         if let Some(item) = workspace_report_item(uri, version, items, previous) {
-            self.items.push(item);
+            match &mut self.streaming {
+                Some(streaming) if has_new_diagnostics(&item) => streaming.unsent.push(item),
+                Some(_) | None => self.items.push(item),
+            }
+        }
+        // Also after a file with nothing to report, so that an entry buffered
+        // earlier is sent once the interval passes, not only with the next one.
+        if let Some(streaming) = &mut self.streaming {
+            streaming.maybe_flush();
         }
     }
 
     /// Clears every previous id that no checked file claimed, under the URI the
     /// client sent, and returns the response.
+    ///
+    /// In a streaming pull the response holds what was not sent as a partial
+    /// result: the unchanged and cleared entries and the full entries still
+    /// buffered. The LSP spec's general rule is that a response after partial
+    /// results has no result values. Like ty, `finish` departs from that rule.
+    /// vscode-languageclient reports the response's entries the same way as a
+    /// chunk's, so VS Code shows them.
     pub(crate) fn finish(self) -> WorkspaceDiagnosticReport {
         let mut items = self.items;
+        if let Some(streaming) = self.streaming {
+            items.extend(streaming.unsent);
+        }
         let to_clear = self
             .previous
             .into_values()
@@ -97,6 +135,86 @@ impl WorkspaceReportBuilder {
             .chain(self.unresolved);
         items.extend(to_clear.map(|uri| cleared_report(uri, None)));
         WorkspaceDiagnosticReport { items }
+    }
+}
+
+/// When a streaming pull sends the full entries it has buffered.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum FlushPolicy {
+    /// Once this long has passed since the previous chunk was sent, or since the
+    /// pull began, so that a large workspace costs the client a chunk per
+    /// interval rather than a notification per file.
+    Interval(Duration),
+    /// Once this many entries are buffered, so that tests stream without
+    /// depending on the clock.
+    #[cfg(test)]
+    Count(usize),
+}
+
+impl FlushPolicy {
+    /// The server sends at most one chunk every 50 ms, as ty does.
+    pub(crate) const SERVER: Self = Self::Interval(Duration::from_millis(50));
+}
+
+/// Sends the full entries with new diagnostics to the client as partial results
+/// while the pull runs, in chunks timed by a [`FlushPolicy`].
+///
+/// The spec asks for the first chunk to be a `WorkspaceDiagnosticReport` and
+/// later ones to be `WorkspaceDiagnosticReportPartialResult`s. Both are
+/// `{"items": [...]}` on the wire
+/// (<https://github.com/microsoft/language-server-protocol/issues/2281>), so every
+/// chunk is sent as the request's partial result type.
+///
+/// Unchanged entries never stream (nothing changed for the client to show), and
+/// neither do cleared ones (as in ty). Both wait for the response.
+pub(crate) struct Streaming {
+    sender: PartialResultSender<WorkspaceDiagnosticRequest>,
+    policy: FlushPolicy,
+    last_flush: Instant,
+    /// Full entries not yet sent.
+    unsent: Vec<WorkspaceDocumentDiagnosticReport>,
+}
+
+impl Streaming {
+    pub(crate) fn new(
+        sender: PartialResultSender<WorkspaceDiagnosticRequest>,
+        policy: FlushPolicy,
+    ) -> Self {
+        Self {
+            sender,
+            policy,
+            last_flush: Instant::now(),
+            unsent: Vec::new(),
+        }
+    }
+
+    /// Sends the buffered entries as one chunk if the policy says it is time.
+    fn maybe_flush(&mut self) {
+        if self.unsent.is_empty() {
+            return;
+        }
+        let due = match self.policy {
+            FlushPolicy::Interval(interval) => self.last_flush.elapsed() >= interval,
+            #[cfg(test)]
+            FlushPolicy::Count(count) => self.unsent.len() >= count,
+        };
+        if due {
+            let items = mem::take(&mut self.unsent);
+            self.sender
+                .send(WorkspaceDiagnosticReportPartialResult { items });
+            self.last_flush = Instant::now();
+        }
+    }
+}
+
+/// Whether `item` carries new diagnostics: a full report with a result id. A
+/// cleared entry is a full report with no id.
+const fn has_new_diagnostics(item: &WorkspaceDocumentDiagnosticReport) -> bool {
+    match item {
+        WorkspaceDocumentDiagnosticReport::WorkspaceFullDocumentDiagnosticReport(full) => {
+            full.full_document_diagnostic_report.result_id.is_some()
+        },
+        WorkspaceDocumentDiagnosticReport::WorkspaceUnchangedDocumentDiagnosticReport(_) => false,
     }
 }
 
@@ -155,7 +273,9 @@ fn cleared_report(
 
 #[cfg(test)]
 mod tests {
-    use lsp_types::{DiagnosticSeverity, Position, Range};
+    use crossbeam_channel::Receiver;
+    use lsp_types::{DiagnosticSeverity, Position, ProgressToken, Range};
+    use serde_json::json;
 
     use super::*;
 
@@ -230,6 +350,12 @@ mod tests {
     const SERVER_URI: &str = "file:///c:/ws/a.wgsl";
     /// The same file as [`SERVER_URI`], spelled the way a client might.
     const CLIENT_URI: &str = "file:///C%3A/ws/a.wgsl";
+
+    const A_WGSL: &str = "file:///ws/a.wgsl";
+    const B_WGSL: &str = "file:///ws/b.wgsl";
+    const C_WGSL: &str = "file:///ws/c.wgsl";
+    const D_WGSL: &str = "file:///ws/d.wgsl";
+    const E_WGSL: &str = "file:///ws/e.wgsl";
 
     #[test]
     fn diagnostics_without_a_previous_id_are_full() {
@@ -334,6 +460,7 @@ mod tests {
                 previous("file:///ws/deleted.wgsl", "deleted-id"),
             ],
             resolve,
+            None,
         );
         builder.add_file(checked, uri(SERVER_URI), None, items);
         let report = builder.finish();
@@ -346,5 +473,134 @@ mod tests {
                 full("file:///ws/skipped.wgsl", None, None, Vec::new()),
             ]
         );
+    }
+
+    /// A streaming mode whose chunks land in the returned receiver.
+    fn streaming(policy: FlushPolicy) -> (Streaming, Receiver<lsp_server::Message>) {
+        let (sender, client) = crossbeam_channel::unbounded();
+        let sender = PartialResultSender::new(sender, ProgressToken::from("token"));
+        (Streaming::new(sender, policy), client)
+    }
+
+    /// The chunks sent so far, as the `value`s of `$/progress` notifications
+    /// under the client's token.
+    fn chunks(client: &Receiver<lsp_server::Message>) -> Vec<serde_json::Value> {
+        client
+            .try_iter()
+            .map(|message| {
+                let message = serde_json::to_value(message).unwrap();
+                assert_eq!(message["method"], "$/progress");
+                assert_eq!(message["params"]["token"], "token");
+                message["params"]["value"].clone()
+            })
+            .collect()
+    }
+
+    fn chunk(items: &[WorkspaceDocumentDiagnosticReport]) -> serde_json::Value {
+        json!({ "items": items })
+    }
+
+    /// Full entries stream once two are buffered. The unchanged entry, the
+    /// cleared entries (a fixed file, and an id that names no known file) and the
+    /// full entry still buffered at the end go in the response.
+    #[test]
+    fn streaming_sends_new_diagnostics_in_chunks_and_holds_the_rest() {
+        let items = vec![diagnostic("unknown type")];
+        let id = result_id(&items, false).unwrap();
+        let open_id = result_id(&items, true).unwrap();
+        let stale_id = result_id(&[diagnostic("unknown function")], false).unwrap();
+        let file = FileId::from_raw;
+        let resolve = |uri: &Uri| match uri.as_str() {
+            B_WGSL => Some(file(1)),
+            C_WGSL => Some(file(2)),
+            D_WGSL => Some(file(3)),
+            _ => None,
+        };
+        let (streaming, client) = streaming(FlushPolicy::Count(2));
+        let mut builder = WorkspaceReportBuilder::new(
+            vec![
+                previous(B_WGSL, &id),
+                previous(C_WGSL, &stale_id),
+                previous(D_WGSL, &id),
+                previous("file:///ws/deleted.wgsl", "deleted-id"),
+            ],
+            resolve,
+            Some(streaming),
+        );
+
+        builder.add_file(file(0), uri(A_WGSL), None, items.clone());
+        builder.add_file(file(1), uri(B_WGSL), None, items.clone());
+        assert_eq!(chunks(&client), Vec::<serde_json::Value>::new());
+
+        builder.add_file(file(2), uri(C_WGSL), Some(2), items.clone());
+        assert_eq!(
+            chunks(&client),
+            [chunk(&[
+                full(A_WGSL, None, Some(id.clone()), items.clone()),
+                full(C_WGSL, Some(2), Some(open_id), items.clone()),
+            ])]
+        );
+
+        builder.add_file(file(3), uri(D_WGSL), Some(5), Vec::new());
+        builder.add_file(file(4), uri(E_WGSL), None, items.clone());
+        let report = builder.finish();
+        assert_eq!(chunks(&client), Vec::<serde_json::Value>::new());
+        assert_eq!(
+            sorted(report),
+            vec![
+                unchanged(B_WGSL, None, id.clone()),
+                full(D_WGSL, Some(5), None, Vec::new()),
+                full("file:///ws/deleted.wgsl", None, None, Vec::new()),
+                full(E_WGSL, None, Some(id), items),
+            ]
+        );
+    }
+
+    /// The spec wants the first chunk to be a `WorkspaceDiagnosticReport` and
+    /// the later ones `WorkspaceDiagnosticReportPartialResult`s. Both are
+    /// `{"items": [...]}`, so this checks that each chunk parses as the type the
+    /// spec names for its position. Everything streamed, so the response is empty.
+    #[test]
+    fn chunks_parse_as_the_report_types_the_spec_names() {
+        let items = vec![diagnostic("unknown type")];
+        let id = result_id(&items, false).unwrap();
+        let (streaming, client) = streaming(FlushPolicy::Count(1));
+        let mut builder = WorkspaceReportBuilder::new(Vec::new(), |_| None, Some(streaming));
+        builder.add_file(FileId::from_raw(0), uri(A_WGSL), None, items.clone());
+        builder.add_file(FileId::from_raw(1), uri(B_WGSL), None, items.clone());
+        assert_eq!(builder.finish(), WorkspaceDiagnosticReport::default());
+
+        let chunks = chunks(&client);
+        let [first, second] = chunks.as_slice() else {
+            panic!("expected two chunks, got {chunks:#?}");
+        };
+        let first: WorkspaceDiagnosticReport = serde_json::from_value(first.clone()).unwrap();
+        assert_eq!(
+            first.items,
+            [full(A_WGSL, None, Some(id.clone()), items.clone())]
+        );
+        let second: WorkspaceDiagnosticReportPartialResult =
+            serde_json::from_value(second.clone()).unwrap();
+        assert_eq!(second.items, [full(B_WGSL, None, Some(id), items)]);
+    }
+
+    /// The server's policy holds full entries until the interval has passed, then
+    /// sends them on the next file checked, even a file with nothing to report.
+    #[test]
+    fn the_interval_policy_sends_once_the_interval_has_passed() {
+        let items = vec![diagnostic("unknown type")];
+        let id = result_id(&items, false).unwrap();
+        let (streaming, client) = streaming(FlushPolicy::Interval(Duration::from_secs(3600)));
+        let mut builder = WorkspaceReportBuilder::new(Vec::new(), |_| None, Some(streaming));
+        builder.add_file(FileId::from_raw(0), uri(A_WGSL), None, items.clone());
+        assert_eq!(chunks(&client), Vec::<serde_json::Value>::new());
+
+        builder.streaming.as_mut().unwrap().policy = FlushPolicy::Interval(Duration::ZERO);
+        builder.add_file(FileId::from_raw(1), uri(B_WGSL), None, Vec::new());
+        assert_eq!(
+            chunks(&client),
+            [chunk(&[full(A_WGSL, None, Some(id), items)])]
+        );
+        assert_eq!(builder.finish(), WorkspaceDiagnosticReport::default());
     }
 }
