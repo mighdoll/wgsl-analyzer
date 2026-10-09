@@ -1,0 +1,846 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workspace pull diagnostics - workspace-diagnostics</title>
+<style>
+  :root {
+    --ground: #f6f8f7; --surface: #ffffff; --ink: #17201d; --muted: #5b6663;
+    --line: #dce3e0; --accent: #0e7c6e; --accent-text: #0a5f54;
+    --focus: #b4560f; --code-bg: #eff3f1; --chip-bg: rgba(14,124,110,0.08);
+    --token-cm: #6b7a75; --token-kw: #0e7c6e; --token-str: #8a4b12; --token-fn: #24509b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #101413; --surface: #161c1a; --ink: #e6ecea; --muted: #93a09b;
+      --line: #2a332f; --accent: #45c6b1; --accent-text: #45c6b1;
+      --focus: #e0894a; --code-bg: #1b2320; --chip-bg: rgba(69,198,177,0.1);
+      --token-cm: #7c8b85; --token-kw: #45c6b1; --token-str: #d79a62; --token-fn: #7fa7e8;
+    }
+  }
+  html { background: var(--ground); color-scheme: light dark; }
+  body {
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--ground); color: var(--ink); margin: 0; padding: 0 20px 80px;
+  }
+  .page { max-width: 46rem; margin: 0 auto; }
+  .mono, code, pre, .eyebrow, .tag, .stopnum, .toc a, .meta {
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  header.masthead { padding: 56px 0 8px; }
+  .eyebrow { font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent-text); margin: 0 0 14px; }
+  h1 { font-size: clamp(1.9rem, 4vw, 2.5rem); font-weight: 750;
+    letter-spacing: -0.02em; line-height: 1.12; margin: 0 0 12px; text-wrap: balance; }
+  .meta { font-size: 0.8rem; color: var(--muted); margin: 0 0 4px; }
+  .meta b { color: var(--ink); font-weight: 600; }
+  .toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 8px; }
+  .toc a { font-size: 0.75rem; text-decoration: none; color: var(--accent-text);
+    border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px;
+    background: var(--surface); }
+  .toc a:hover { border-color: var(--accent); }
+  h2 { font-size: 1.3rem; font-weight: 700; letter-spacing: -0.01em;
+    margin: 56px 0 4px; text-wrap: balance; }
+  .lede { color: var(--muted); margin: 0 0 20px; font-size: 0.95rem; }
+  p { margin: 0 0 14px; }
+  a { color: var(--accent-text); }
+  .tldr { background: var(--surface); border: 1px solid var(--line);
+    border-left: 3px solid var(--accent); border-radius: 8px;
+    padding: 18px 22px; margin: 28px 0 0; }
+  .tldr p { margin: 0 0 10px; } .tldr p:last-child { margin: 0; }
+  .tag { font-size: 0.62rem; letter-spacing: 0.08em; text-transform: uppercase;
+    border-radius: 4px; padding: 1px 6px; vertical-align: 1px; white-space: nowrap; }
+  .tag.stated { color: var(--accent-text); background: var(--chip-bg); }
+  .tag.inferred { color: var(--focus); background: transparent; border: 1px solid var(--focus); }
+  .ladder { list-style: none; margin: 16px 0; padding: 0; border-left: 2px solid var(--line); }
+  .ladder li { padding: 6px 0 6px 18px; position: relative; }
+  .ladder li::before { content: ""; position: absolute; left: -5px; top: 16px;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--ground); border: 2px solid var(--accent); }
+  .ladder code { font-size: 0.78rem; color: var(--muted); margin-right: 8px; }
+  .ladder .what { color: var(--muted); font-size: 0.9rem; }
+  .flow { display: grid; grid-template-columns: 1fr 1fr; gap: 28px;
+    margin: 24px 0; align-items: start; }
+  @media (max-width: 640px) { .flow { grid-template-columns: 1fr; } }
+  .lane { display: flex; flex-direction: column; align-items: stretch; }
+  .lane-title { font-family: ui-monospace, Menlo, monospace; font-size: 0.72rem;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
+    text-align: center; margin-bottom: 12px; }
+  .node { background: var(--surface); border: 1px solid var(--line);
+    border-radius: 7px; padding: 9px 14px; font-size: 0.88rem; text-align: center; }
+  .node code { font-size: 0.8rem; }
+  .node.emph { border-color: var(--accent); background: var(--chip-bg); }
+  .node .sub { display: block; color: var(--muted); font-size: 0.76rem; margin-top: 2px; }
+  .connector { width: 2px; height: 16px; background: var(--line); margin: 0 auto; position: relative; }
+  .connector::after { content: ""; position: absolute; bottom: -2px; left: -3px;
+    border-left: 4px solid transparent; border-right: 4px solid transparent;
+    border-top: 6px solid var(--line); }
+  .tablewrap { overflow-x: auto; margin: 18px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+  th { text-align: left; font-family: ui-monospace, Menlo, monospace;
+    font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted); font-weight: 500; padding: 6px 14px 6px 0;
+    border-bottom: 1px solid var(--line); }
+  td { padding: 8px 14px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td code { font-size: 0.8rem; }
+  .stop { display: grid; grid-template-columns: 52px 1fr; gap: 0 16px; margin: 34px 0; }
+  .stopnum { font-size: 1.5rem; font-weight: 600; color: var(--accent);
+    line-height: 1.2; padding-top: 1px; font-variant-numeric: tabular-nums; }
+  .stop h3 { margin: 0 0 2px; font-size: 1.05rem; font-weight: 650; }
+  .stop .file { font-size: 0.78rem; margin: 0 0 10px; }
+  .stop .file a { text-decoration: none; }
+  .stop .file a:hover { text-decoration: underline; }
+  .stop .body { min-width: 0; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto; font-size: 0.8rem; line-height: 1.55;
+    margin: 12px 0; }
+  code { font-size: 0.84em; }
+  p code, li code, td code { background: var(--code-bg); border-radius: 4px; padding: 1px 5px; }
+  pre code { background: none; padding: 0; font-size: 1em; }
+  .cm { color: var(--token-cm); } .kw { color: var(--token-kw); }
+  .str { color: var(--token-str); } .fn { color: var(--token-fn); }
+  .risk { background: var(--surface); border: 1px solid var(--line);
+    border-left: 3px solid var(--focus); border-radius: 8px;
+    padding: 14px 18px; margin: 14px 0; }
+  .risk h3 { margin: 0 0 6px; font-size: 0.95rem; font-weight: 650; }
+  .risk p { margin: 0 0 8px; font-size: 0.92rem; } .risk p:last-child { margin: 0; }
+  ul.plain, ol.plain { padding-left: 20px; margin: 12px 0; }
+  ul.plain li, ol.plain li { margin: 6px 0; }
+  ol.plain li { padding-left: 4px; margin: 10px 0; }
+  details.q { background: var(--surface); border: 1px solid var(--line);
+    border-radius: 8px; margin: 10px 0; padding: 0; }
+  details.q[open] { border-color: var(--accent); }
+  details.q summary { cursor: pointer; padding: 13px 18px; font-weight: 600;
+    font-size: 0.95rem; list-style: none; display: flex; gap: 12px; }
+  details.q summary::-webkit-details-marker { display: none; }
+  details.q summary::before { content: attr(data-n);
+    font-family: ui-monospace, Menlo, monospace; color: var(--accent);
+    font-weight: 600; flex-shrink: 0; }
+  details.q summary:focus-visible { outline: 2px solid var(--accent); border-radius: 8px; }
+  details.q .a { padding: 2px 18px 14px 46px; font-size: 0.92rem;
+    border-top: 1px dashed var(--line); padding-top: 12px; margin-top: 2px; }
+  footer.colophon { margin-top: 70px; padding-top: 18px;
+    border-top: 1px solid var(--line); color: var(--muted); font-size: 0.8rem; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="masthead">
+  <p class="eyebrow">Branch orientation</p>
+  <h1>Pull diagnostics for the whole workspace: result ids, streaming, and long polling</h1>
+  <p class="meta"><b>branch</b> workspace-diagnostics (review mode) &middot; <b>HEAD</b> 018f6496 &middot; <b>merge-base</b> 60019996 (= origin/main, fetched 2026-10-08)</p>
+  <p class="meta"><b>11 commits ahead</b> &middot; +3679 / -105 across 20 files (code +1716/-105 in 14 files, tests +944 in 1 file, docs +1019 in 5 files) &middot; merges cleanly (git merge-tree, no conflicts)</p>
+  <p class="meta"><b>scope</b> crates/wgsl-analyzer (server only; editors/code untouched) and docs/ &middot; <b>generated</b> 2026-10-08</p>
+  <nav class="toc"> <!-- spellchecker:disable-line -->
+    <a href="#tldr">TL;DR</a>
+    <a href="#demo">Try it first</a>
+    <a href="#context">Where this fits</a>
+    <a href="#flow">The flow</a>
+    <a href="#modules">Module map</a>
+    <a href="#tour">Guided tour</a>
+    <a href="#focus">Where to focus</a>
+    <a href="#notdone">Not done / open</a>
+    <a href="#quiz">Quiz</a>
+  </nav> <!-- spellchecker:disable-line -->
+</header>
+
+<section id="tldr" class="tldr">
+  <p>The branch answers LSP 3.17 <code>workspace/diagnostic</code> (issue #975), modeled on ty's server, and moves <code>textDocument/diagnostic</code> onto the same content-hash result ids. <span class="tag stated">planned</span></p>
+  <ul class="plain">
+    <li><b>Result id</b> = a fixed-key SipHash of the converted LSP diagnostics plus an "is the file open" flag. A clean file has no id. A matching previous id gets an <i>unchanged</i> report. <span class="tag stated">stated</span> <a href="../crates/wgsl-analyzer/src/diagnostics/result_id.rs#L53"><code>result_id.rs:53</code></a></li>
+    <li><b>Workspace pull</b> checks every <code>.wgsl</code>/<code>.wesl</code> file in local source roots plus every open shader file. Each file gets unchanged / full / cleared / omitted. Previous ids are keyed by <code>FileId</code>, not URI. <span class="tag stated">stated</span> <a href="../crates/wgsl-analyzer/src/global_state.rs#L659"><code>global_state.rs:659</code></a>, <a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L278"><code>workspace_report.rs:278</code></a></li>
+    <li><b>Streaming</b>: with a <code>partialResultToken</code> (VS Code always sends one), files with new diagnostics go out as <code>$/progress</code> chunks at most every 50 ms. Unchanged and cleared entries, and any leftovers, ride in the response, which is therefore not empty. <span class="tag stated">stated</span> <a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L195"><code>workspace_report.rs:195</code></a>, <a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L155"><code>workspace_report.rs:155</code></a></li>
+    <li><b>Long polling</b>: a pull with nothing new, and no chunk sent, is parked in one slot and re-run when state changes (edit, open/close, config, quiescence). A wake counter catches a handler that ran across a change. <span class="tag stated">stated</span> <a href="../crates/wgsl-analyzer/src/long_poll.rs#L99"><code>long_poll.rs:99</code></a>, <a href="../crates/wgsl-analyzer/src/main_loop.rs#L549"><code>main_loop.rs:549</code></a></li>
+    <li><b>Two supporting fixes</b>: one shared "VFS still loading" answer in the dispatcher, and line endings recorded only after <code>apply_change</code>, so a snapshot never sees a file its database lacks. <span class="tag stated">stated</span> <a href="../crates/wgsl-analyzer/src/dispatch.rs#L284"><code>dispatch.rs:284</code></a>, <a href="../crates/wgsl-analyzer/src/global_state.rs#L315"><code>global_state.rs:315</code></a></li>
+  </ul>
+  <p>Each of the 7 code commits builds and passes on its own (48 -&gt; 92 tests). New this run: the client version the lockfile ships, vscode-languageclient 10.1.2, forgets a file's workspace result id when the file closes. Version 9.0.1, which every client claim on the branch was read from, keeps it. That likely brings back stale diagnostics after a quick close. <span class="tag inferred">inferred</span> <span class="tag inferred">new this run</span> (see <a href="#focus">Where to focus</a>)</p>
+</section>
+
+<section id="demo">
+  <h2>Try it first</h2>
+  <p class="lede">Steps 1-3 run headless. Steps 4-7 need VS Code and a scratch folder. <code>cargo xtask install</code> replaces your installed server and extension, so step 8 undoes that.</p>
+  <ol class="plain">
+    <li><b>Run the suite.</b> <code>cargo test -p wgsl-analyzer --ignore-rust-version</code> (Cargo.toml asks for rustc 1.99). Expect 92 passed. <code>cargo test -p wgsl-analyzer --ignore-rust-version --lib pull_diagnostics</code> runs just the 17 harness tests, in about 0.01 s.
+    </li>
+    <li><b>Watch a pull park and wake.</b> Read <code>suspended_workspace_pull_is_answered_after_a_change</code> (<a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L783"><code>pull_diagnostics.rs:783</code></a>), then run it by name.
+      <ul class="plain">
+        <li>A change that leaves diagnostics alone re-runs the pull, which parks again.</li>
+        <li>A change that alters them answers the pull.</li>
+      </ul>
+    </li>
+    <li><b>Break the race guard on purpose.</b> <code>workspace_pull_that_finished_before_a_change_runs_again</code> (<a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L814"><code>pull_diagnostics.rs:814</code></a>) pins the <code>RunAgain</code> path.
+      <ul class="plain">
+        <li>Comment out the <code>changes</code> comparison at <a href="../crates/wgsl-analyzer/src/long_poll.rs#L103"><code>long_poll.rs:103</code></a> and the test fails (it waits on a parked request that should have re-run).</li>
+        <li>Restore with <code>git checkout -- crates/wgsl-analyzer/src/long_poll.rs</code>.</li>
+      </ul>
+    </li>
+    <li><b>Install the client that ships.</b> <code>cargo xtask install</code> runs <code>pnpm install --frozen-lockfile</code> (<a href="../xtask/src/install.rs#L89"><code>install.rs:89</code></a>), which replaces the stale 9.0.1 in <code>editors/code/node_modules</code> with the locked 10.1.2.
+      <ul class="plain">
+        <li>Confirm afterwards: <code>node -p "require('./editors/code/node_modules/vscode-languageclient/package.json').version"</code> prints 10.1.2.</li>
+      </ul>
+    </li>
+    <li><b>Run the manual check.</b> Follow <a href="../docs/workspace-diagnostics-manual-check.md#L1"><code>workspace-diagnostics-manual-check.md:1</code></a> with <code>"wgsl-analyzer.trace.server": "verbose"</code>.
+      <ul class="plain">
+        <li>Healthy: no new <code>workspace/diagnostic</code> every 2 s while idle; an edit that changes diagnostics answers the parked pull.</li>
+        <li>Failure sign: "Workspace diagnostic pull failed" in the client output (six failures stop workspace pulls for the session).</li>
+      </ul>
+    </li>
+    <li><b>Make the 10.1.2 close edge visible.</b> <span class="tag inferred">new this run</span> In the scratch folder, <code>b.wgsl</code> is clean on disk. Type an error into <code>b.wgsl</code>, then within 2 s close the tab and choose "Don't Save".
+      <ul class="plain">
+        <li>Watch the trace: the next <code>workspace/diagnostic</code> has no <code>b.wgsl</code> entry in <code>previousResultIds</code>, and no response mentions <code>b.wgsl</code>.</li>
+        <li>Suspected result: the Problems panel keeps the error for a file that is clean on disk.</li>
+        <li>Control: wait more than 2 s (until the next pull parks) before closing, and the error clears.</li>
+        <li>Same shape for a dependency file opened with go to definition and closed within 2 s. Manual check step 8 (<a href="../docs/workspace-diagnostics-manual-check.md#L65"><code>workspace-diagnostics-manual-check.md:65</code></a>) waits for the next pull to park before closing, so it never hits this window.</li>
+      </ul>
+    </li>
+    <li><b>Feel the per-keystroke cost.</b> Open a large <code>.wgsl</code> folder (a 260-file, 11 MB corpus re-checked in 370-590 ms) and type steadily.
+      <ul class="plain">
+        <li>The trace shows the parked pull re-running per edit, <code>ServerCancelled</code> answers when the next keystroke lands, and a re-pull 2 s later.</li>
+        <li>Watch CPU in Activity Monitor.</li>
+      </ul>
+    </li>
+    <li><b>Clean up.</b> Delete the scratch folder, reset <code>wgsl-analyzer.trace.server</code>, and reinstall your usual server and extension build.</li>
+  </ol>
+  <p>There is no e2e suite against VS Code. The closest is the harness in <a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L51"><code>pull_diagnostics.rs:51</code></a>, which drives the real main loop and task pool with a recording client channel.</p>
+</section>
+
+<section id="context">
+  <h2>Where this fits</h2>
+  <p class="lede">This is the whole of the plan: phases 1-5 (result ids, bulk, streaming, long polling, docs) all landed. <span class="tag stated">planned</span> The plan and journal are local working notes, not in the repo.</p>
+  <p>What already existed before the branch:</p>
+  <ul class="plain">
+    <li>A push path (<code>publishDiagnostics</code>) for open files only, used only when the client cannot pull. Gate: <a href="../crates/wgsl-analyzer/src/main_loop.rs#L539"><code>main_loop.rs:539</code></a>. <span class="tag stated">stated</span></li>
+    <li>A document pull handler that echoed the client's <code>previousResultId</code> back, so it could never answer "unchanged". <span class="tag stated">stated</span> (commit 9418af8a message)</li>
+    <li><code>workspace_diagnostics: false /* FIXME */</code> in the capabilities; now <code>true</code> at <a href="../crates/wgsl-analyzer/src/lsp/capabilities.rs#L138"><code>capabilities.rs:138</code></a>. <span class="tag stated">stated</span></li>
+    <li><code>workspace/diagnostic/refresh</code> sent on every state change or quiescence when the client supports it: <a href="../crates/wgsl-analyzer/src/main_loop.rs#L533"><code>main_loop.rs:533</code></a>. Pre-existing, untouched. <span class="tag stated">stated</span></li>
+    <li><code>gen-lsp-types 0.11</code> already had every request and report type. No LSP end-to-end harness. <span class="tag stated">planned</span></li>
+  </ul>
+  <p>Commit ladder, oldest first. This is the recommended reading order.</p>
+  <ol class="ladder">
+    <li><code>fd548f9f</code>Share the VFS-loading answer in the request dispatcher.<br><span class="what">Refactor, no behavior change. <code>answered_while_vfs_loads</code> (<a href="../crates/wgsl-analyzer/src/dispatch.rs#L284">dispatch.rs:284</a>) replaces two copies.</span></li>
+    <li><code>7a7ba545</code>Fix document pulls of files the database has not seen.<br><span class="what">Line endings recorded after <code>apply_change</code> (<a href="../crates/wgsl-analyzer/src/global_state.rs#L315">global_state.rs:315</a>); <code>has_text</code> guard (<a href="../crates/wgsl-analyzer/src/handlers/request.rs#L380">request.rs:380</a>).</span></li> <!-- spellchecker:disable-line -->
+    <li><code>9418af8a</code>Result ids and unchanged reports for document diagnostics.<br><span class="what">New <code>diagnostics/result_id.rs</code>; stop echoing the client's id; the fallback report drops its constant id.</span></li>
+    <li><code>6235a776</code>Answer workspace/diagnostic pulls.<br><span class="what">Bulk report, candidate files, capability, open flag in the id, shared <code>pull_diagnostics</code> and cancel error.</span></li>
+    <li><code>1e9962ae</code>Stream workspace diagnostics as partial results.<br><span class="what"><code>Streaming</code> / <code>FlushPolicy</code>, <code>PartialResultSender</code>, a sender clone on the snapshot.</span></li>
+    <li><code>1f6e4c50</code>Hold workspace diagnostic pulls open until something changes.<br><span class="what"><code>long_poll.rs</code>, <code>on_long_poll</code>, <code>Task::Suspend</code>, the wakes, cancel / shutdown / displace.</span></li>
+    <li><code>218c82da</code>Test pull diagnostics against an in-memory workspace.<br><span class="what">The 17-test harness; <code>Event</code> and <code>handle_event</code> become <code>pub(crate)</code>.</span></li>
+    <li><code>710acc41</code>Document pull diagnostics.<br><span class="what">User-facing section in docs/book/src/diagnostics.md.</span></li>
+    <li><code>4747af55</code>Maintainer report.<br><span class="what">docs/workspace-diagnostics-report.md (planned).</span></li>
+    <li><code>f498d919</code>Orientation findings and report for maintainers.<br><span class="what">docs/workspace-diagnostics-findings.md and docs/workspace-diagnostics-orient.html (not in the plan).</span></li>
+    <li><code>018f6496</code>Manual VS Code check.<br><span class="what">docs/workspace-diagnostics-manual-check.md. Landed while this report was being written.</span></li>
+  </ol>
+  <p>Unit tests for commits 3-6 live in the same files as the code; the harness arrives at commit 7. Verified this run: every code commit (1-7) builds and passes on its own: 48, 48, 56, 64, 67, 75, 92 tests.</p>
+  <p>Plan deviations, all recorded in the journal: <span class="tag stated">stated</span></p>
+  <ul class="plain">
+    <li><code>on_long_poll</code> instead of <code>on_with_vfs_default</code> (the handler needs a "do not answer" outcome).</li>
+    <li>A method-agnostic <code>suspended_request</code> slot.</li>
+    <li>A per-file skip-and-clear for disabled diagnostics instead of an early empty report.</li>
+    <li>Timing measured on other corpora (the bevy fixture has no shader files).</li>
+    <li>Not in the plan: the orientation findings and HTML report committed under docs/. <span class="tag inferred">inferred</span></li>
+  </ul>
+</section>
+
+<section id="flow">
+  <h2>The flow</h2>
+  <p class="lede">The two pulls share the per-file computation and the id. Only the workspace pull can decline to answer.</p>
+  <div class="flow">
+    <div class="lane">
+      <div class="lane-title">textDocument/diagnostic</div>
+      <div class="node">client pull<span class="sub">uri + previousResultId</span></div>
+      <div class="connector"></div>
+      <div class="node"><code>on_with_vfs_default</code><span class="sub">VFS loading -&gt; empty report</span></div>
+      <div class="connector"></div>
+      <div class="node"><code>handle_document_diagnostics</code><span class="sub">no text yet -&gt; empty report</span></div>
+      <div class="connector"></div>
+      <div class="node"><code>pull_diagnostics</code><span class="sub">converted LSP items (shared)</span></div>
+      <div class="connector"></div>
+      <div class="node emph"><code>document_diagnostic_report</code><span class="sub">id matches -&gt; unchanged, else full</span></div>
+      <div class="connector"></div>
+      <div class="node">response</div>
+    </div>
+    <div class="lane">
+      <div class="lane-title">workspace/diagnostic</div>
+      <div class="node">client pull<span class="sub">previousResultIds + partialResultToken</span></div>
+      <div class="connector"></div>
+      <div class="node"><code>on_long_poll</code><span class="sub">records change count, takes snapshot</span></div>
+      <div class="connector"></div>
+      <div class="node"><code>workspace_shader_files</code> -&gt; <code>add_file</code><span class="sub">per file: pull_diagnostics, result id</span></div>
+      <div class="connector"></div>
+      <div class="node"><code>$/progress</code> chunks<span class="sub">new diagnostics, every 50 ms</span></div>
+      <div class="connector"></div>
+      <div class="node emph"><code>finish</code><span class="sub">nothing new and no chunk -&gt; Suspend</span></div>
+      <div class="connector"></div>
+      <div class="node"><code>park_request</code><span class="sub">park, displace, or run again</span></div>
+      <div class="connector"></div>
+      <div class="node">wake on change -&gt; run again<span class="sub">or answer: response with the rest</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="modules">
+  <h2>Module map</h2>
+  <p class="lede">Paths are under <code>crates/wgsl-analyzer/src/</code> unless they start with <code>docs/</code>.</p>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>module</th><th>role</th><th>touches</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><a href="../crates/wgsl-analyzer/src/diagnostics/result_id.rs#L53"><code>diagnostics/result_id.rs</code></a></td><td>result id hash; document full-vs-unchanged decision</td><td>new (9418af8a, 6235a776)</td></tr>
+        <tr><td><a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L59"><code>diagnostics/workspace_report.rs</code></a></td><td>per-file entries, streaming buffer, clearing, suspend decision</td><td>new (6235a776, 1e9962ae, 1f6e4c50)</td></tr>
+        <tr><td><a href="../crates/wgsl-analyzer/src/long_poll.rs#L81"><code>long_poll.rs</code></a></td><td>the one parked-request slot and its wake counter</td><td>new (1f6e4c50)</td></tr>
+        <tr><td><a href="../crates/wgsl-analyzer/src/dispatch.rs#L174"><code>dispatch.rs</code></a></td><td><code>on_long_poll</code>, <code>long_poll_task</code>, shared VFS-loading answer</td><td>changed</td></tr>
+        <tr><td><a href="../crates/wgsl-analyzer/src/main_loop.rs#L765"><code>main_loop.rs</code></a></td><td><code>park_request</code>, <code>wake_suspended_request</code>, wake site, shutdown, registration</td><td>changed</td></tr>
+        <tr><td><a href="../crates/wgsl-analyzer/src/global_state.rs#L659"><code>global_state.rs</code></a></td><td>candidate files, <code>has_text</code>, sender on the snapshot, line endings after <code>apply_change</code></td><td>changed</td></tr>
+        <tr><td><a href="../crates/wgsl-analyzer/src/handlers/request.rs#L420"><code>handlers/request.rs</code></a></td><td>both pull handlers, shared <code>pull_diagnostics</code>, cancel error</td><td>changed</td></tr>
+        <tr><td><a href="../crates/wgsl-analyzer/src/lsp/utilities.rs#L67"><code>lsp/utilities.rs</code></a></td><td><code>PartialResultSender</code>: <code>$/progress</code> from a worker thread</td><td>changed</td></tr>
+        <tr><td><a href="../crates/wgsl-analyzer/src/handlers/notification.rs#L39"><code>handlers/notification.rs</code></a></td><td><code>$/cancelRequest</code> drops a parked pull</td><td>one line</td></tr>
+        <tr><td><a href="../crates/wgsl-analyzer/src/reload.rs#L59"><code>reload.rs</code></a></td><td>configuration change wakes a parked pull</td><td>one line</td></tr>
+        <tr><td><a href="../crates/wgsl-analyzer/src/lsp/capabilities.rs#L138"><code>lsp/capabilities.rs</code></a></td><td><code>workspaceDiagnostics: true</code></td><td>one line</td></tr>
+        <tr><td><a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L51"><code>tests/pull_diagnostics.rs</code></a></td><td>in-memory harness, 17 tests</td><td>new (218c82da)</td></tr>
+        <tr><td><a href="../docs/book/src/diagnostics.md#L9"><code>docs/book/src/diagnostics.md</code></a></td><td>user docs: "Pull diagnostics"</td><td>new section</td></tr>
+        <tr><td><a href="../docs/workspace-diagnostics-report.md#L1"><code>docs/workspace-diagnostics-report.md</code></a></td><td>maintainer report</td><td>new</td></tr>
+        <tr><td><a href="../docs/workspace-diagnostics-manual-check.md#L1"><code>docs/workspace-diagnostics-manual-check.md</code></a></td><td>nine-step VS Code check</td><td>new</td></tr>
+        <tr><td><a href="../docs/workspace-diagnostics-findings.md#L1"><code>docs/workspace-diagnostics-findings.md</code></a></td><td>earlier orient findings, permalinked</td><td>new</td></tr>
+        <tr><td><a href="../docs/workspace-diagnostics-orient.html#L1"><code>docs/workspace-diagnostics-orient.html</code></a></td><td>earlier brief-mode orient report</td><td>new</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>The decisions live in two new pure modules (which id, which entry, suspend or not). The dispatcher and main loop only gained one new ability: not answering a request yet.</p>
+</section>
+
+<section id="tour">
+  <h2>Guided tour</h2>
+  <p class="lede">Twelve stops, bottom of the stack to the top: pure decisions, then the handlers, then the parking machinery, then the harness.</p>
+
+  <div class="stop">
+    <div class="stopnum">1</div>
+    <div class="body">
+      <h3>The result id is a fingerprint, not a stored token</h3>
+      <p class="file"><a href="../crates/wgsl-analyzer/src/diagnostics/result_id.rs#L53">crates/wgsl-analyzer/src/diagnostics/result_id.rs:53</a> &middot; hunk from line 53</p>
+      <p>The id is recomputed from the diagnostics on every pull, so the server stores nothing between pulls. <span class="tag stated">stated</span></p>
+      <ul class="plain">
+        <li>Hashes the converted <code>lsp_types::Diagnostic</code> list (ranges after line-index conversion, related info, tags), so it changes exactly when what the client sees changes. <span class="tag stated">stated</span></li>
+        <li><code>DefaultHasher::new()</code> has fixed keys, so ids are stable within a process. The doc explains why not <code>FxHasher</code> (a collision leaves stale diagnostics). <span class="tag stated">stated</span></li>
+        <li>The open flag rationale (<a href="../crates/wgsl-analyzer/src/diagnostics/result_id.rs#L38"><code>result_id.rs:38</code></a>) assumes the client sends its last workspace id after a close. That is 9.0.1 behavior; 10.1.2 sends none (see <a href="#focus">Where to focus</a>). <span class="tag inferred">inferred</span> <span class="tag inferred">new this run</span></li>
+        <li>Tests: <a href="../crates/wgsl-analyzer/src/diagnostics/result_id.rs#L164"><code>result_id.rs:164</code></a> (open flag), <a href="../crates/wgsl-analyzer/src/diagnostics/result_id.rs#L180"><code>result_id.rs:180</code></a> (each visible field changes the id).</li>
+      </ul>
+<pre><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn</span> <span class="fn">result_id</span>(
+    items: &amp;[Diagnostic],
+    open: bool,
+) -&gt; Option&lt;String&gt; {
+    <span class="kw">if</span> items.<span class="fn">is_empty</span>() {
+        <span class="kw">return</span> None;
+    }
+    <span class="kw">let</span> <span class="kw">mut</span> hasher = DefaultHasher::<span class="fn">new</span>();
+    items.<span class="fn">hash</span>(&amp;<span class="kw">mut</span> hasher);
+    open.<span class="fn">hash</span>(&amp;<span class="kw">mut</span> hasher);
+    Some(<span class="fn">format!</span>(<span class="str">"{:016x}"</span>, hasher.<span class="fn">finish</span>()))
+}</code></pre>
+      <p>Read it this way: <code>items.is_empty()</code> -&gt; a clean file has no id; <code>open.hash</code> -&gt; open and closed ids differ.</p>
+    </div>
+  </div>
+
+  <div class="stop">
+    <div class="stopnum">2</div>
+    <div class="body">
+      <h3>The document pull answers unchanged only on an exact id match</h3>
+      <p class="file"><a href="../crates/wgsl-analyzer/src/diagnostics/result_id.rs#L78">crates/wgsl-analyzer/src/diagnostics/result_id.rs:78</a> &middot; handler <a href="../crates/wgsl-analyzer/src/handlers/request.rs#L373">handlers/request.rs:373</a> &middot; hunk from line 82</p>
+      <p><code>document_diagnostic_report</code> is a pure function, so it is unit tested without a server. <span class="tag stated">stated</span></p>
+      <ul class="plain">
+        <li>A clean file always gets a full report with no items and no id, even when the client sends an id. That costs an empty full report but lets a later workspace pull tell "fixed" from "never had diagnostics". <span class="tag stated">stated</span> (commit 9418af8a)</li>
+        <li>Document pulls always hash <code>open = true</code> (<a href="../crates/wgsl-analyzer/src/diagnostics/result_id.rs#L82"><code>result_id.rs:82</code></a>). <span class="tag stated">stated</span></li>
+        <li>The fallback report (VFS loading, unknown file, no text) is an empty full report with no id, so the client clears and stops sending an id. <span class="tag stated">stated</span> <a href="../crates/wgsl-analyzer/src/handlers/request.rs#L369"><code>request.rs:369</code></a></li>
+        <li>Tests: <a href="../crates/wgsl-analyzer/src/diagnostics/result_id.rs#L233"><code>result_id.rs:233</code></a>, <a href="../crates/wgsl-analyzer/src/diagnostics/result_id.rs#L256"><code>result_id.rs:256</code></a>.</li>
+      </ul>
+<pre><code><span class="kw">match</span> <span class="fn">result_id</span>(&amp;items, <span class="kw">true</span>) {
+    Some(result_id) <span class="kw">if</span> previous_result_id == Some(result_id.<span class="fn">as_str</span>()) =&gt; {
+        RelatedUnchangedDocumentDiagnosticReport {
+            related_documents: None,
+            unchanged_document_diagnostic_report: UnchangedDocumentDiagnosticReport {
+                result_id,
+            },
+        }
+        .<span class="fn">into</span>()
+    },
+    result_id =&gt; RelatedFullDocumentDiagnosticReport {
+        related_documents: None,
+        full_document_diagnostic_report: FullDocumentDiagnosticReport { result_id, items },
+    }
+    .<span class="fn">into</span>(),
+}</code></pre>
+    </div>
+  </div>
+
+  <div class="stop">
+    <div class="stopnum">3</div>
+    <div class="body">
+      <h3>Line endings now mean "the database has this file"</h3>
+      <p class="file"><a href="../crates/wgsl-analyzer/src/global_state.rs#L315">crates/wgsl-analyzer/src/global_state.rs:315</a> &middot; doc <a href="../crates/wgsl-analyzer/src/global_state.rs#L77">global_state.rs:77</a> &middot; <code>has_text</code> <a href="../crates/wgsl-analyzer/src/global_state.rs#L635">global_state.rs:635</a> &middot; hunk from line 313</p>
+      <p>Snapshots share the live VFS with the main loop. A worker could find a file whose text the database had not applied yet, and panic in <code>file_source_root</code>. <span class="tag stated">stated</span> (commit 7a7ba545)</p> <!-- spellchecker:disable-line -->
+      <ul class="plain">
+        <li><code>apply_change</code> waits for every older snapshot to drop (salsa <code>cancel_others</code>), so endings recorded after it are only visible to snapshots whose database has the file. <span class="tag stated">stated</span></li>
+        <li><code>has_text</code> is that check; the document pull (<a href="../crates/wgsl-analyzer/src/handlers/request.rs#L380"><code>request.rs:380</code></a>) and the candidate list both use it. It also covers non-UTF-8 files, which used to panic in <code>file_line_index</code>. <span class="tag stated">stated</span></li>
+        <li>Blast radius: every other <code>file_line_index</code> caller behaves the same for snapshots taken after the latest <code>process_changes</code>, which is every dispatched request. <span class="tag inferred">inferred</span></li>
+        <li>Tested: non-UTF-8 at <a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L633"><code>pull_diagnostics.rs:633</code></a>. Not tested: a document pull of a file written but not yet applied, the commit's main case. <span class="tag inferred">inferred</span> <span class="tag inferred">new this run</span></li>
+      </ul>
+<pre><code><span class="cm">// Waits until every older snapshot is dropped, so none of them can see the</span>
+<span class="cm">// line endings recorded below.</span>
+<span class="kw">self</span>.analysis_host.<span class="fn">apply_change</span>(change);
+<span class="kw">self</span>.vfs.<span class="fn">write</span>().1.<span class="fn">extend</span>(new_line_endings);</code></pre>
+    </div>
+  </div>
+
+  <div class="stop">
+    <div class="stopnum">4</div>
+    <div class="body">
+      <h3>Which files a workspace pull checks</h3>
+      <p class="file"><a href="../crates/wgsl-analyzer/src/global_state.rs#L659">crates/wgsl-analyzer/src/global_state.rs:659</a> &middot; hunk from line 676</p>
+      <p>Local shader files always, library files only while open. <span class="tag stated">stated</span></p>
+      <ul class="plain">
+        <li>Starts from VFS files that exist and have line endings (the <code>has_text</code> condition). <span class="tag stated">stated</span></li>
+        <li><code>FileExtension::from_file</code> admits only <code>wgsl</code> and <code>wesl</code>, so <code>wesl.toml</code> manifests are skipped. <span class="tag stated">stated</span></li>
+        <li>Open library files are checked because, once the server advertises workspace diagnostics, vscode-languageclient stops clearing a closed document itself. Only a workspace pull can clear it. <span class="tag stated">stated</span> (commit 6235a776)</li>
+        <li>Test: <a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L525"><code>pull_diagnostics.rs:525</code></a> (an open library file is reported, then cleared after close).</li>
+      </ul>
+<pre><code><span class="kw">self</span>.analysis.<span class="fn">with_db</span>(|db| {
+    with_text
+        .<span class="fn">into_iter</span>()
+        .<span class="fn">filter</span>(|&amp;file_id| {
+            <span class="kw">let</span> source_root_id = db.<span class="fn">file_source_root</span>(file_id).<span class="fn">source_root_id</span>(db);
+            <span class="kw">let</span> source_root = db.<span class="fn">source_root</span>(source_root_id).<span class="fn">source_root</span>(db);
+            (open.<span class="fn">contains</span>(&amp;file_id) || !source_root.<span class="fn">is_library</span>())
+                &amp;&amp; FileExtension::<span class="fn">from_file</span>(&amp;source_root, file_id).<span class="fn">is_ok</span>()
+        })
+        .<span class="fn">collect</span>()
+})</code></pre>
+    </div>
+  </div>
+
+  <div class="stop">
+    <div class="stopnum">5</div>
+    <div class="body">
+      <h3>One entry per file: unchanged, full, cleared, or nothing</h3>
+      <p class="file"><a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L278">crates/wgsl-analyzer/src/diagnostics/workspace_report.rs:278</a> &middot; hunk from line 284</p>
+      <p>The whole per-file policy is this one match. <span class="tag stated">stated</span></p>
+      <ul class="plain">
+        <li>The id hashes <code>version.is_some()</code>: open according to the server. <span class="tag stated">stated</span></li>
+        <li>Cleared = full, no items, no id, under the URI the client sent (<a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L306"><code>workspace_report.rs:306</code></a>). Full and unchanged use the server's URI. <span class="tag stated">stated</span></li>
+        <li>A clean file with no previous id is omitted (<a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L307"><code>workspace_report.rs:307</code></a>). This is the arm the 10.1.2 close finding runs into. <span class="tag inferred">inferred</span> <span class="tag inferred">new this run</span></li>
+        <li>Previous ids are keyed by <code>FileId</code> (<a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L88"><code>workspace_report.rs:88</code></a>). With two spellings of one file, the later wins and the earlier gets no answer. <span class="tag stated">stated</span></li>
+        <li>Tests: <a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L422"><code>workspace_report.rs:422</code></a>, <a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L453"><code>workspace_report.rs:453</code></a>, <a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L467"><code>workspace_report.rs:467</code></a>.</li>
+      </ul>
+<pre><code><span class="kw">match</span> (<span class="fn">result_id</span>(&amp;items, version.<span class="fn">is_some</span>()), previous) {
+    (Some(result_id), Some(previous)) <span class="kw">if</span> previous.value == result_id =&gt; Some(
+        WorkspaceUnchangedDocumentDiagnosticReport {
+            uri,
+            version,
+            unchanged_document_diagnostic_report: UnchangedDocumentDiagnosticReport {
+                result_id,
+            },
+        }
+        .<span class="fn">into</span>(),
+    ),
+    (Some(result_id), _) =&gt; Some(<span class="cm">/* full report with the new id */</span>),
+    (None, Some(previous)) =&gt; Some(<span class="fn">cleared_report</span>(previous.uri, version)),
+    (None, None) =&gt; None,
+}</code></pre>
+      <p>The comment marks an elided arm: the full report, lines 295-305.</p>
+    </div>
+  </div>
+
+  <div class="stop">
+    <div class="stopnum">6</div>
+    <div class="body">
+      <h3>Streaming: only new diagnostics go out early</h3>
+      <p class="file"><a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L235">crates/wgsl-analyzer/src/diagnostics/workspace_report.rs:235</a> &middot; routing <a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L104">workspace_report.rs:104</a> &middot; sender <a href="../crates/wgsl-analyzer/src/lsp/utilities.rs#L67">lsp/utilities.rs:67</a> &middot; hunk from line 235</p>
+      <p>A full entry with an id is buffered and flushed as a <code>$/progress</code> chunk once the interval has passed. Everything else waits for the response. <span class="tag stated">stated</span></p>
+      <ul class="plain">
+        <li><code>FlushPolicy::SERVER</code> is <code>Interval(50 ms)</code> (<a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L195"><code>workspace_report.rs:195</code></a>). Tests use a <code>Count</code> policy so they never read the clock, and no test streams with <code>SERVER</code>. <span class="tag stated">stated</span></li>
+        <li><code>maybe_flush</code> also runs after clean files, so a buffered entry does not wait for the next new one. <span class="tag stated">stated</span></li>
+        <li>Chunks go straight onto the connection from the worker. The response goes through the main loop after the handler returns, so chunks always arrive first (doc at <a href="../crates/wgsl-analyzer/src/lsp/utilities.rs#L63"><code>utilities.rs:63</code></a>). <span class="tag stated">stated</span></li>
+        <li>Every chunk is typed <code>WorkspaceDiagnosticReportPartialResult</code>. The spec's first-chunk type has the same wire shape (test <a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L662"><code>workspace_report.rs:662</code></a>). <span class="tag stated">stated</span></li>
+        <li><code>sent_chunk</code> is the flag long polling reads in stop 7. <span class="tag stated">stated</span></li>
+      </ul>
+<pre><code><span class="kw">fn</span> <span class="fn">maybe_flush</span>(&amp;<span class="kw">mut</span> <span class="kw">self</span>) {
+    <span class="kw">if</span> <span class="kw">self</span>.unsent.<span class="fn">is_empty</span>() {
+        <span class="kw">return</span>;
+    }
+    <span class="kw">let</span> due = <span class="kw">match</span> <span class="kw">self</span>.policy {
+        FlushPolicy::Interval(interval) =&gt; <span class="kw">self</span>.last_flush.<span class="fn">elapsed</span>() &gt;= interval,
+        #[cfg(test)]
+        FlushPolicy::Count(count) =&gt; <span class="kw">self</span>.unsent.<span class="fn">len</span>() &gt;= count,
+    };
+    <span class="kw">if</span> due {
+        <span class="kw">let</span> items = mem::<span class="fn">take</span>(&amp;<span class="kw">mut</span> <span class="kw">self</span>.unsent);
+        <span class="kw">self</span>.sender
+            .<span class="fn">send</span>(WorkspaceDiagnosticReportPartialResult { items });
+        <span class="kw">self</span>.last_flush = Instant::<span class="fn">now</span>();
+        <span class="kw">self</span>.sent_chunk = <span class="kw">true</span>;
+    }
+}</code></pre>
+    </div>
+  </div>
+
+  <div class="stop">
+    <div class="stopnum">7</div>
+    <div class="body">
+      <h3><code>finish</code>: clear what the client still holds, then answer or suspend</h3>
+      <p class="file"><a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L155">crates/wgsl-analyzer/src/diagnostics/workspace_report.rs:155</a> &middot; spec-departure comment <a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L141">workspace_report.rs:141</a> &middot; hunk from line 159</p>
+      <p>Previous ids no checked file claimed are cleared, unless the file is open. Then the pull suspends only if nothing is new and no chunk went out. <span class="tag stated">stated</span></p>
+      <ul class="plain">
+        <li>Why spare open files (<a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L130"><code>workspace_report.rs:130</code></a>): VS Code keeps sending the document pull's id for an open file the pull skips. Clearing it would put a cleared entry in every pull, and nothing would ever suspend. <span class="tag stated">stated</span></li>
+        <li>Why a streamed pull is always answered: run again, it would compare against <code>previousResultIds</code> missing the ids the client took from chunks. A streamed file fixed meanwhile would be omitted, not cleared. <span class="tag stated">stated</span> (commit 1f6e4c50)</li>
+        <li>The response after chunks is not empty, against the spec's general rule. ty does the same, and both 9.0.1 and 10.1.2 apply it (10.1.2 checked this run). <span class="tag stated">stated</span> Pinned by <a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L690"><code>pull_diagnostics.rs:690</code></a>.</li>
+      </ul>
+<pre><code><span class="kw">let</span> <span class="kw">mut</span> items = <span class="kw">self</span>.items;
+<span class="kw">let</span> <span class="kw">mut</span> sent_chunk = <span class="kw">false</span>;
+<span class="kw">if</span> <span class="kw">let</span> Some(streaming) = <span class="kw">self</span>.streaming {
+    sent_chunk = streaming.sent_chunk;
+    items.<span class="fn">extend</span>(streaming.unsent);
+}
+<span class="kw">let</span> to_clear = <span class="kw">self</span>
+    .previous
+    .<span class="fn">into_iter</span>()
+    .<span class="fn">filter</span>(|&amp;(file_id, _)| <span class="fn">version</span>(file_id).<span class="fn">is_none</span>())
+    .<span class="fn">map</span>(|(_, previous)| previous.uri)
+    .<span class="fn">chain</span>(<span class="kw">self</span>.unresolved);
+items.<span class="fn">extend</span>(to_clear.<span class="fn">map</span>(|uri| <span class="fn">cleared_report</span>(uri, None)));
+<span class="kw">if</span> !sent_chunk &amp;&amp; items.<span class="fn">iter</span>().<span class="fn">all</span>(is_unchanged) {
+    LongPoll::Suspend
+} <span class="kw">else</span> {
+    LongPoll::Respond(WorkspaceDiagnosticReport { items })
+}</code></pre>
+    </div>
+  </div>
+
+  <div class="stop">
+    <div class="stopnum">8</div>
+    <div class="body">
+      <h3>The workspace handler glues it together</h3>
+      <p class="file"><a href="../crates/wgsl-analyzer/src/handlers/request.rs#L429">crates/wgsl-analyzer/src/handlers/request.rs:429</a> &middot; shared helper <a href="../crates/wgsl-analyzer/src/handlers/request.rs#L393">request.rs:393</a> &middot; cancel error <a href="../crates/wgsl-analyzer/src/handlers/request.rs#L461">request.rs:461</a> &middot; hunk from line 435</p>
+      <p><code>handle_workspace_diagnostics</code> (<a href="../crates/wgsl-analyzer/src/handlers/request.rs#L420"><code>request.rs:420</code></a>) only fixes the flush policy. <code>workspace_diagnostics</code> takes it as a parameter so tests can pass a count. <span class="tag stated">stated</span></p>
+      <ul class="plain">
+        <li>Both pulls compute items with the same <code>pull_diagnostics</code>, so a document id and a workspace id for an open file match. Test: <a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L579"><code>pull_diagnostics.rs:579</code></a>. <span class="tag stated">stated</span></li>
+        <li>One file's error (<code>?</code> at <a href="../crates/wgsl-analyzer/src/handlers/request.rs#L448"><code>request.rs:448</code></a>) fails the whole workspace pull, and vscode-languageclient stops workspace pulls after six failures. <span class="tag inferred">inferred</span></li>
+        <li>The <code>if !config.enabled</code> branch (<a href="../crates/wgsl-analyzer/src/handlers/request.rs#L399"><code>request.rs:399</code></a>) cannot run: <code>Config::diagnostics</code> hard-codes <code>enabled: true</code> (<a href="../crates/wgsl-analyzer/src/config.rs#L583"><code>config.rs:583</code></a>). <span class="tag stated">stated</span></li>
+        <li>Comments at <a href="../crates/wgsl-analyzer/src/handlers/request.rs#L390"><code>request.rs:390</code></a> and <a href="../crates/wgsl-analyzer/src/handlers/request.rs#L445"><code>request.rs:445</code></a> describe per-source-root disabling that does not exist. <span class="tag stated">stated</span> <span class="tag inferred">new this run</span></li>
+        <li>Salsa cancellation answers <code>ServerCancelled { retriggerRequest: true }</code> through <code>diagnostic_pull_cancelled</code>, which no test reaches. <span class="tag stated">stated</span></li>
+      </ul>
+<pre><code><span class="kw">let</span> streaming = parameters
+    .partial_result_params
+    .partial_result_token
+    .<span class="fn">map</span>(|token| Streaming::<span class="fn">new</span>(snap.<span class="fn">partial_result_sender</span>(token), flush));
+<span class="kw">let</span> <span class="kw">mut</span> report = WorkspaceReportBuilder::<span class="fn">new</span>(
+    parameters.previous_result_ids,
+    |uri| snap.<span class="fn">url_to_file_id</span>(uri).<span class="fn">ok</span>().<span class="fn">flatten</span>(),
+    streaming,
+);
+<span class="kw">for</span> file_id <span class="kw">in</span> snap.<span class="fn">workspace_shader_files</span>()? {
+    <span class="cm">// A file with diagnostics disabled reports nothing, so a previous id for</span>
+    <span class="cm">// it is cleared (once the file is closed, see</span>
+    <span class="cm">// `WorkspaceReportBuilder::finish`).</span>
+    <span class="kw">let</span> Some(items) = <span class="fn">pull_diagnostics</span>(snap, file_id)? <span class="kw">else</span> {
+        <span class="kw">continue</span>;
+    };
+    <span class="kw">let</span> uri = snap.<span class="fn">file_id_to_url</span>(file_id);
+    <span class="kw">let</span> version = snap.<span class="fn">file_version</span>(file_id);
+    report.<span class="fn">add_file</span>(file_id, uri, version, items);
+}
+Ok(report.<span class="fn">finish</span>(|file_id| snap.<span class="fn">file_version</span>(file_id)))</code></pre>
+    </div>
+  </div>
+
+  <div class="stop">
+    <div class="stopnum">9</div>
+    <div class="body">
+      <h3>The parked-request slot and its counter</h3>
+      <p class="file"><a href="../crates/wgsl-analyzer/src/long_poll.rs#L99">crates/wgsl-analyzer/src/long_poll.rs:99</a> &middot; module doc <a href="../crates/wgsl-analyzer/src/long_poll.rs#L1">long_poll.rs:1</a> &middot; hunk from line 99</p>
+      <p>At most one request is parked. The counter counts wakes, whether or not anything was parked. <span class="tag stated">stated</span></p>
+      <ul class="plain">
+        <li><code>park</code> compares the count taken at dispatch with the current one. A handler that ran across a change would park a stale "nothing changed", so it runs again at once. <span class="tag stated">stated</span></li>
+        <li>A second parked request displaces the first, which is answered with its empty report. <span class="tag stated">stated</span></li>
+        <li>Why a counter, not the salsa revision: opening or closing a file changes the id (the open flag) without moving the revision. <span class="tag stated">stated</span> (journal)</li>
+        <li>Unit tests: <a href="../crates/wgsl-analyzer/src/long_poll.rs#L163"><code>long_poll.rs:163</code></a> (ran across a change), <a href="../crates/wgsl-analyzer/src/long_poll.rs#L175"><code>long_poll.rs:175</code></a> (displacement).</li>
+      </ul>
+<pre><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn</span> <span class="fn">park</span>(
+    &amp;<span class="kw">mut</span> <span class="kw">self</span>,
+    suspended: Suspended,
+) -&gt; Park {
+    <span class="kw">if</span> suspended.changes != <span class="kw">self</span>.changes {
+        <span class="kw">return</span> Park::RunAgain(suspended.request);
+    }
+    <span class="kw">match</span> <span class="kw">self</span>.parked.<span class="fn">replace</span>(suspended) {
+        Some(displaced) =&gt; Park::Displaced(displaced.no_news),
+        None =&gt; Park::Parked,
+    }
+}
+
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn</span> <span class="fn">wake</span>(&amp;<span class="kw">mut</span> <span class="kw">self</span>) -&gt; Option&lt;Request&gt; {
+    <span class="kw">self</span>.changes += 1;
+    <span class="kw">self</span>.parked.<span class="fn">take</span>().<span class="fn">map</span>(|parked| parked.request)
+}</code></pre>
+    </div>
+  </div>
+
+  <div class="stop">
+    <div class="stopnum">10</div>
+    <div class="body">
+      <h3>The dispatcher learns to not answer</h3>
+      <p class="file"><a href="../crates/wgsl-analyzer/src/dispatch.rs#L174">crates/wgsl-analyzer/src/dispatch.rs:174</a> &middot; result routing <a href="../crates/wgsl-analyzer/src/dispatch.rs#L399">dispatch.rs:399</a> &middot; VFS gate <a href="../crates/wgsl-analyzer/src/dispatch.rs#L284">dispatch.rs:284</a> &middot; hunk from line 411</p>
+      <p><code>on_long_poll</code> is <code>on_with_vfs_default</code> plus two things. It records the change count with the snapshot, and a <code>Suspend</code> result becomes <code>Task::Suspend</code> instead of a response. <span class="tag stated">stated</span></p>
+      <ul class="plain">
+        <li>The count is read just before the snapshot (<a href="../crates/wgsl-analyzer/src/dispatch.rs#L199"><code>dispatch.rs:199</code></a>). Both happen on the main thread, so there is no race between them. <span class="tag stated">stated</span></li>
+        <li>Every other outcome goes through the shared <code>response_task</code> (<a href="../crates/wgsl-analyzer/src/dispatch.rs#L371"><code>dispatch.rs:371</code></a>), a verbatim move out of <code>on_with_thread_intent</code>. Blast radius: none for the 13 other <code>on</code> handlers. <span class="tag inferred">inferred</span></li>
+        <li>While the VFS loads, the pull is answered <code>{items: []}</code> rather than parked (the gate only checks <code>vfs_done</code>). Test: <a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L936"><code>pull_diagnostics.rs:936</code></a>. <span class="tag stated">stated</span></li>
+      </ul>
+<pre><code><span class="kw">let</span> result = <span class="kw">match</span> result {
+    Ok(Ok(LongPoll::Suspend)) =&gt; {
+        <span class="kw">let</span> no_news = Response::<span class="fn">new_ok</span>(request.id.<span class="fn">clone</span>(), <span class="fn">default</span>());
+        <span class="kw">return</span> Task::Suspend(Suspended {
+            request,
+            no_news,
+            changes,
+        });
+    },
+    Ok(Ok(LongPoll::Respond(value))) =&gt; Ok(Ok(value)),
+    Ok(Err(error)) =&gt; Ok(Err(error)),
+    Err(panic) =&gt; Err(panic),
+};
+<span class="fn">response_task</span>::&lt;<span class="kw">false</span>, R&gt;(request, result, on_cancelled)</code></pre>
+    </div>
+  </div>
+
+  <div class="stop">
+    <div class="stopnum">11</div>
+    <div class="body">
+      <h3>The main loop parks, wakes, cancels, and gives up</h3>
+      <p class="file"><a href="../crates/wgsl-analyzer/src/main_loop.rs#L765">crates/wgsl-analyzer/src/main_loop.rs:765</a> &middot; wake site <a href="../crates/wgsl-analyzer/src/main_loop.rs#L549">main_loop.rs:549</a> &middot; config wake <a href="../crates/wgsl-analyzer/src/reload.rs#L59">reload.rs:59</a> &middot; cancel <a href="../crates/wgsl-analyzer/src/handlers/notification.rs#L39">notification.rs:39</a> &middot; shutdown <a href="../crates/wgsl-analyzer/src/main_loop.rs#L984">main_loop.rs:984</a> &middot; registration <a href="../crates/wgsl-analyzer/src/main_loop.rs#L1027">main_loop.rs:1027</a> &middot; hunk from line 771</p>
+      <p>The wake reuses the trigger the push path already had: state changed, became quiescent, or open documents added or removed. A configuration change wakes too. <span class="tag stated">stated</span></p>
+      <ul class="plain">
+        <li>The wake site sits inside <code>if self.is_quiescent()</code> (<a href="../crates/wgsl-analyzer/src/main_loop.rs#L496"><code>main_loop.rs:496</code></a>). A change while not quiescent is deferred to the became-quiescent wake, not lost. Untested. <span class="tag inferred">inferred</span> <span class="tag inferred">new this run</span></li>
+        <li>Cancel drops the parked request, and the request queue answers <code>RequestCancelled</code>. A cancel that lands while the handler runs is caught by <code>is_completed</code> in <code>park_request</code>. <span class="tag stated">stated</span></li>
+        <li>Shutdown and displacement answer with the empty report, not <code>RequestCancelled</code>. vscode-languageclient would count that toward its six-failure cutoff (true in 9.0.1 and 10.1.2). <span class="tag stated">stated</span></li>
+        <li>Exit without shutdown leaves a parked request unanswered; the connection is closing anyway. <span class="tag inferred">inferred</span></li>
+        <li>Tests: <a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L814"><code>pull_diagnostics.rs:814</code></a>, <a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L835"><code>pull_diagnostics.rs:835</code></a>, <a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L861"><code>pull_diagnostics.rs:861</code></a>, <a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L883"><code>pull_diagnostics.rs:883</code></a>, <a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L912"><code>pull_diagnostics.rs:912</code></a>.</li>
+      </ul>
+<pre><code><span class="kw">if</span> <span class="kw">self</span>.<span class="fn">is_completed</span>(&amp;suspended.request) {
+    <span class="kw">return</span>;
+}
+<span class="cm">// The shutdown handler has already answered any parked request. Answer</span>
+<span class="cm">// this one now too, so the client is not left waiting for it.</span>
+<span class="kw">if</span> <span class="kw">self</span>.shutdown_requested {
+    <span class="kw">self</span>.<span class="fn">respond</span>(suspended.no_news);
+    <span class="kw">return</span>;
+}
+<span class="kw">match</span> <span class="kw">self</span>.suspended_request.<span class="fn">park</span>(suspended) {
+    Park::Parked =&gt; (),
+    Park::Displaced(no_news) =&gt; <span class="kw">self</span>.<span class="fn">respond</span>(no_news),
+    Park::RunAgain(request) =&gt; <span class="kw">self</span>.<span class="fn">on_request</span>(request),
+}</code></pre>
+    </div>
+  </div>
+
+  <div class="stop">
+    <div class="stopnum">12</div>
+    <div class="body">
+      <h3>The harness: a real main loop with a recording client</h3>
+      <p class="file"><a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L51">crates/wgsl-analyzer/src/tests/pull_diagnostics.rs:51</a></p>
+      <p><code>Workspace::new</code> builds a real <code>GlobalState</code> over an in-memory VFS whose sends go to a channel the test reads. Only <code>src/</code> is local, so <code>lib/</code> lands in a library root. <span class="tag stated">stated</span></p>
+      <ul class="plain">
+        <li>Handler tests call the pull handlers directly. Long-poll tests send <code>Event</code>s through <code>handle_event</code> and the real task pool (<a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L226"><code>pull_diagnostics.rs:226</code></a>). <span class="tag stated">stated</span></li>
+        <li>It uses <code>ClientCapabilities::default()</code> (<a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L55"><code>pull_diagnostics.rs:55</code></a>): pull off, refresh off. So the push gate and the refresh path VS Code sees are never exercised. <span class="tag inferred">inferred</span></li>
+        <li><code>next_task</code> waits up to 60 s (<a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L254"><code>pull_diagnostics.rs:254</code></a>), so a wake regression shows up as a one-minute stall, not a message. <span class="tag inferred">inferred</span></li>
+        <li>No main-loop test sends <code>didOpen</code>, <code>didClose</code>, or <code>didChange</code>; <code>open</code> and <code>close</code> write the document set directly. Opening through the main loop with these capabilities would make the push path spawn <code>Task::Diagnostics</code> onto the same channel <code>next_task</code> reads. <span class="tag inferred">inferred</span> <span class="tag inferred">new this run</span></li>
+        <li>Ran 10 of 10 green this run. <span class="tag stated">stated</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="focus">
+  <h2>Where to focus</h2>
+  <p class="lede">Ranked by what a user could see. Each card says whether a test guards it.</p>
+
+  <div class="risk">
+    <h3>1. Closing a file within 2 s of a workspace answer can strand its diagnostics (10.1.2) <span class="tag inferred">inferred</span> <span class="tag inferred">new this run</span></h3>
+    <p>vscode-languageclient 10.1.2 <code>forgetDocument</code> also forgets the file's workspace result id on close; 9.0.1 kept it. See <code>vscode-languageclient@10.1.2 lib/common/diagnostic.js:287</code> (<code>this.forget(PullState.workspace, document)</code>), absent from 9.0.1's <code>forgetDocument</code>.</p>
+    <p>When a pull is parked at the close, its earlier <code>previousResultIds</code> still carry the id, and the wake clears or refreshes the file. In the 2 s gap after an answer, nothing is parked. The next pull sends no id, and the server omits a clean file (<a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L307"><code>workspace_report.rs:307</code></a>) and does not check a closed library file (<a href="../crates/wgsl-analyzer/src/global_state.rs#L682"><code>global_state.rs:682</code></a>).</p>
+    <p>Result: errors from the last pre-close document pull stay in the Problems panel. Two paths: "Don't Save" on a file that is clean on disk, and a dependency file opened by go to definition. The second is the bug commit 6235a776 fixed.</p>
+    <p>Guard: none. No test models the client, and manual check step 8 (<a href="../docs/workspace-diagnostics-manual-check.md#L65"><code>workspace-diagnostics-manual-check.md:65</code></a>) waits for the pull to park before closing. Try it first, step 6, reproduces it.</p>
+  </div>
+
+  <div class="risk">
+    <h3>2. The final response after chunks is not empty <span class="tag stated">stated</span></h3>
+    <p>This was a major item in the earlier review. <code>finish</code> puts unchanged, cleared, and unsent full entries in the response after chunks went out. LSP 3.17's general rule says that response carries no results. ty does the same. Both 9.0.1 and 10.1.2 apply the response's entries (10.1.2 read this run).</p>
+    <p>A client that follows the spec would drop the cleared entries and keep stale diagnostics. Documented as a departure in <a href="../docs/book/src/diagnostics.md#L31"><code>diagnostics.md:31</code></a>.</p>
+    <p>Guarded: current behavior pinned by <a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L690"><code>pull_diagnostics.rs:690</code></a>. Conforming (send the rest as a final chunk, answer <code>{items: []}</code>) is a few lines in <a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L155"><code>workspace_report.rs:155</code></a>.</p>
+  </div>
+
+  <div class="risk">
+    <h3>3. Every change re-checks the whole workspace while a pull is parked <span class="tag stated">stated</span></h3>
+    <p>Each wake (<a href="../crates/wgsl-analyzer/src/main_loop.rs#L549"><code>main_loop.rs:549</code></a>) re-runs the full check. Journal numbers, release build: 370 ms re-check and 592 ms after a one-file edit on an 11 MB <code>.wgsl</code> corpus; 3.3 ms and 18 ms on bevy's <code>.wesl</code>. naga output is not cached per file.</p>
+    <p>The next keystroke usually cancels the run: a <code>ServerCancelled</code> answer, then a client re-pull 2 s later. Still a large net win over re-checking every 2 s.</p>
+    <p>Guard: none, no perf test. Options: debounce the wake, skip when the salsa revision did not move (misses open/close), memoize naga per file.</p>
+  </div>
+
+  <div class="risk">
+    <h3>4. As-you-type diagnostics depend on the server's refresh under 10.1.2 <span class="tag inferred">inferred</span> <span class="tag inferred">new this run</span></h3>
+    <p>10.1.2 changed the default <code>diagnosticPullOptions</code> to <code>onChange: false</code> (9.0.1 defaulted to <code>true</code>), and <code>editors/code</code> sets none. Open documents are re-pulled when the server sends <code>workspace/diagnostic/refresh</code>, which it does on every state change (<a href="../crates/wgsl-analyzer/src/main_loop.rs#L533"><code>main_loop.rs:533</code></a>, pre-existing).</p>
+    <p>The workspace answer does not help here: the client skips workspace entries for files it tracks by document pull. So the earlier review's "stop sending refresh?" option would freeze open files' diagnostics while typing.</p>
+    <p>Guard: none. The harness runs with refresh off.</p>
+  </div>
+
+  <div class="risk">
+    <h3>5. One empty diagnostic message fails the whole workspace response <span class="tag stated">stated</span></h3>
+    <p>The push path patches <code>""</code> to <code>" "</code> (<a href="../crates/wgsl-analyzer/src/global_state.rs#L529"><code>global_state.rs:529</code></a>); the pull converter (<a href="../crates/wgsl-analyzer/src/handlers/request.rs#L511"><code>request.rs:511</code></a>) does not. 10.1.2 converts chunk entries inside a try/catch but response entries without one, so a bad entry in the response fails the pull and counts toward the six-failure cutoff. No known producer.</p>
+    <p>Guard: none. Moving the patch into the shared converter is cheap.</p>
+  </div>
+
+  <div class="risk">
+    <h3>6. Chunks can follow a RequestCancelled answer <span class="tag stated">stated</span></h3>
+    <p><code>handle_cancel</code> drops the parked request and answers at once (<a href="../crates/wgsl-analyzer/src/handlers/notification.rs#L39"><code>notification.rs:39</code></a>); a running worker keeps streaming (<a href="../crates/wgsl-analyzer/src/lsp/utilities.rs#L85"><code>utilities.rs:85</code></a>). VS Code drops progress for a disposed token.</p>
+    <p>Guard: none; no streaming test goes through the main loop.</p>
+  </div>
+
+  <div class="risk">
+    <h3>7. The "Don't Save" race is narrowed, not closed <span class="tag stated">stated</span></h3>
+    <p>The open flag (<a href="../crates/wgsl-analyzer/src/diagnostics/result_id.rs#L38"><code>result_id.rs:38</code></a>) fixes the usual case; the fixed case is guarded by <a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L579"><code>pull_diagnostics.rs:579</code></a>. Its reasoning assumes 9.0.1's close behavior, so card 1 changes the analysis under 10.1.2.</p>
+  </div>
+
+  <div class="risk">
+    <h3>8. URI spelling differs by entry kind <span class="tag stated">stated</span></h3>
+    <p>Full and unchanged entries use the server's URI; cleared entries use the client's. Two client spellings of one file: the later wins, the earlier gets no answer (<a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L60"><code>workspace_report.rs:60</code></a>). VS Code normalizes, so it never sees either case. No test.</p>
+  </div>
+
+  <div class="risk">
+    <h3>9. Pulls before quiescence <span class="tag inferred">inferred</span></h3>
+    <p>The pull gate checks only <code>vfs_done</code> (<a href="../crates/wgsl-analyzer/src/dispatch.rs#L284"><code>dispatch.rs:284</code></a>). During package re-discovery a pull computes against the old package graph and may answer import errors that the pull after quiescence corrects. Self-correcting, no panic. No test.</p>
+  </div>
+</section>
+
+<section id="notdone">
+  <h2>Deliberately not done</h2>
+  <p class="lede">All stated in the branch docs, commits, or journal.</p>
+  <ul class="plain">
+    <li>"Checked n/m files" progress: VS Code sends no <code>workDoneToken</code>, and server-initiated progress from a worker needs the main loop's outgoing request queue. <span class="tag stated">stated</span></li>
+    <li>Cleared entries do not stream; they wait for the response (ty's behavior). One-line change at <a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L256"><code>workspace_report.rs:256</code></a>. <span class="tag stated">stated</span></li>
+    <li>A pull during VFS loading is answered, not parked (<a href="../crates/wgsl-analyzer/src/dispatch.rs#L284"><code>dispatch.rs:284</code></a>). Costs one 2 s re-pull at startup. <span class="tag stated">stated</span></li>
+    <li>No per-file close counter (server state) to fully close the "Don't Save" race. <span class="tag stated">stated</span></li>
+    <li>No debounce, revision skip, or naga memoization for the per-change re-check. <span class="tag stated">stated</span></li>
+    <li><code>editors/code</code> untouched: vscode-languageclient starts workspace pulls on its own once <code>workspaceDiagnostics</code> is true. <span class="tag stated">stated</span></li>
+    <li><code>Event</code> and <code>handle_event</code> made <code>pub(crate)</code> for the harness (<a href="../crates/wgsl-analyzer/src/main_loop.rs#L91"><code>main_loop.rs:91</code></a>, <a href="../crates/wgsl-analyzer/src/main_loop.rs#L395"><code>main_loop.rs:395</code></a>) rather than a <code>#[cfg(test)]</code> entry point. <span class="tag stated">stated</span></li>
+    <li>The manual VS Code check has never been run. <span class="tag stated">stated</span></li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <ul class="plain">
+    <li>Should the review artifacts (this report, its findings, and the manual check) merge into main? Only the maintainer report was planned, and the findings restate review notes. A PR description may be the better home. <span class="tag inferred">inferred</span> <span class="tag inferred">new this run</span></li>
+    <li>The branch docs say 10.1.2's "relevant code is the same" as 9.0.1 (<a href="../docs/workspace-diagnostics-manual-check.md#L11"><code>workspace-diagnostics-manual-check.md:11</code></a>, <a href="../docs/workspace-diagnostics-report.md#L159"><code>workspace-diagnostics-report.md:159</code></a>). Two differences this run found contradict that (cards 1 and 4). Re-derive the manual check's expected results against 10.1.2? (Since this pass, the report and the checklist name both differences, and the checklist has a step 10 for card 1. Its other expected results are still derived from 9.0.1.) <span class="tag stated">stated</span> <span class="tag inferred">new this run</span></li>
+    <li>Keep ty's non-empty final response, or conform? Three sentences in <a href="../docs/book/src/diagnostics.md#L31"><code>diagnostics.md:31</code></a> change with the answer. <span class="tag stated">stated</span></li>
+    <li>Fix card 1 on the server? One shape: remember files closed since the last answered workspace pull, and report their current state on the next pull even without a client id (a cleared entry if clean or no longer checked). It would also close the "Don't Save" residual. <span class="tag inferred">inferred</span> <span class="tag inferred">new this run</span></li>
+    <li>Strip the per-root "diagnostics disabled" plumbing and its comments (<a href="../crates/wgsl-analyzer/src/handlers/request.rs#L399"><code>request.rs:399</code></a>, <a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L20"><code>workspace_report.rs:20</code></a>, <a href="../crates/wgsl-analyzer/src/config.rs#L583"><code>config.rs:583</code></a>) until a real setting lands? <span class="tag stated">stated</span></li>
+    <li>Should document pulls hash the server's open state instead of <code>true</code> (<a href="../crates/wgsl-analyzer/src/diagnostics/result_id.rs#L82"><code>result_id.rs:82</code></a>)? Right for VS Code, wrong for a client that pulls unopened documents. <span class="tag stated">stated</span></li>
+    <li>Earlier finding withdrawn: the <code>to_value(...).unwrap()</code> in <code>PartialResultSender::send</code> (<a href="../crates/wgsl-analyzer/src/lsp/utilities.rs#L93"><code>utilities.rs:93</code></a>) matches <code>report_progress</code> in the same file and lsp-server's own unwraps. Not worth a change. <span class="tag inferred">inferred</span></li>
+  </ul>
+</section>
+
+<section id="quiz">
+  <h2>Quiz</h2>
+  <p class="lede">Answer out loud before you click. Hardest decisions first.</p>
+
+  <details class="q">
+    <summary data-n="Q1">A pull that streamed a chunk is always answered, even when every other entry is unchanged. Why not park it?</summary>
+    <div class="a">
+      <p>Run again, it would compare against the <code>previousResultIds</code> it was sent with, which lack the ids the client took from the chunks. A streamed file fixed in between would then be omitted instead of cleared, and its errors would stick. <span class="tag stated">stated</span> <a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L172"><code>workspace_report.rs:172</code></a></p>
+    </div>
+  </details>
+
+  <details class="q">
+    <summary data-n="Q2">Why hash "is the file open" into the result id, and what does it cost?</summary>
+    <div class="a">
+      <p>In 9.0.1, VS Code sends the document pull's id while a file is open and its last workspace id after it closes. Without the flag, a "Don't Save" close could match an id learned while the file was open, get "unchanged", and hide the on-disk errors.</p>
+      <ul class="plain">
+        <li>Cost: one redundant full report per close of a file with diagnostics.</li>
+        <li>Follow-up: 10.1.2 sends no id after a close; what breaks then? (Card 1.)</li>
+        <li><a href="../crates/wgsl-analyzer/src/diagnostics/result_id.rs#L38"><code>result_id.rs:38</code></a></li>
+      </ul>
+    </div>
+  </details>
+
+  <details class="q">
+    <summary data-n="Q3">What goes wrong without the wake counter, and why not use the salsa revision instead?</summary>
+    <div class="a">
+      <p>A handler that started before a change and finished after would park a "nothing changed" computed from an old snapshot. It would then wait for the change after the one it missed.</p>
+      <ul class="plain">
+        <li>Opening or closing a file changes the id without moving the revision, so the revision would miss those.</li>
+        <li><a href="../crates/wgsl-analyzer/src/long_poll.rs#L103"><code>long_poll.rs:103</code></a>, test <a href="../crates/wgsl-analyzer/src/tests/pull_diagnostics.rs#L814"><code>pull_diagnostics.rs:814</code></a></li>
+      </ul>
+    </div>
+  </details>
+
+  <details class="q">
+    <summary data-n="Q4">Why give a clean file no id, rather than the id of an empty list?</summary>
+    <div class="a">
+      <p>So the workspace pull can tell a fixed file (the client still sends an id -&gt; cleared entry) from a file that never had diagnostics (no id -&gt; omitted). The cost is an empty full report where "unchanged" would do. <span class="tag stated">stated</span> (commit 9418af8a)</p>
+    </div>
+  </details>
+
+  <details class="q">
+    <summary data-n="Q5">Why does <code>finish</code> leave an unclaimed id alone while its file is open?</summary>
+    <div class="a">
+      <p>VS Code keeps sending the document pull's id for an open file the workspace pull skips (say, a WGSL-mode file without a shader extension). Clearing it would put a cleared entry in every pull, so no pull would ever suspend. <a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L168"><code>workspace_report.rs:168</code></a></p>
+    </div>
+  </details>
+
+  <details class="q">
+    <summary data-n="Q6">Why key previous ids by <code>FileId</code> rather than the URI string, and what does that cost?</summary>
+    <div class="a">
+      <p>The server's <code>file_id_to_url</code> need not spell a URI the way the client did. The cost: two client spellings of one file collapse, the later wins and the earlier gets no answer. <a href="../crates/wgsl-analyzer/src/diagnostics/workspace_report.rs#L88"><code>workspace_report.rs:88</code></a></p>
+    </div>
+  </details>
+
+  <details class="q">
+    <summary data-n="Q7">Why record line endings after <code>apply_change</code> instead of under the VFS lock before it?</summary>
+    <div class="a">
+      <p>Snapshots share the live VFS. <code>apply_change</code> blocks until every older snapshot drops, so anything recorded after it is visible only to snapshots whose database has the file.</p>
+      <ul class="plain">
+        <li><code>has_text</code> relies on that to avoid panics in <code>file_source_root</code> and <code>file_line_index</code>.</li>
+        <li><a href="../crates/wgsl-analyzer/src/global_state.rs#L315"><code>global_state.rs:315</code></a></li>
+      </ul>
+    </div>
+  </details>
+
+  <details class="q">
+    <summary data-n="Q8">A displaced or shut-down parked pull gets an empty report, not <code>RequestCancelled</code>. Why?</summary>
+    <div class="a">
+      <p>vscode-languageclient treats a <code>RequestCancelled</code> it did not ask for as a failed pull, and six failures stop workspace pulls for the session (same in 9.0.1 and 10.1.2). A client-initiated cancel is different: the client expects that error.</p>
+      <ul class="plain">
+        <li><a href="../crates/wgsl-analyzer/src/long_poll.rs#L107"><code>long_poll.rs:107</code></a> (Displaced), <a href="../crates/wgsl-analyzer/src/main_loop.rs#L984"><code>main_loop.rs:984</code></a> (shutdown)</li>
+      </ul>
+    </div>
+  </details>
+</section>
+
+<footer class="colophon">
+  <p>Generated 2026-10-08 by an AI orientation pass (review mode) against 018f6496, after the branch history was logically rebased. The code is identical from 218c82da on. Commit hashes cite that history and change when the branch is rebased again.</p>
+  <p>Raw material:</p>
+  <ul class="plain">
+    <li><code>git log --oneline origin/main..workspace-diagnostics</code></li>
+    <li><code>git diff --stat origin/main...workspace-diagnostics</code></li>
+    <li><code>git merge-tree --write-tree workspace-diagnostics origin/main</code></li>
+    <li>per commit: <code>cargo test -p wgsl-analyzer --offline --ignore-rust-version</code> in a separate worktree</li>
+    <li><code>cargo clippy -p wgsl-analyzer --all-targets --no-deps -- -D warnings</code>; <code>cargo fmt --all -- --check</code></li>
+    <li>markdownlint-cli2 0.18.1 and typos 1.50.3 on the changed files</li>
+    <li><code>npm pack vscode-languageclient@10.1.2</code> for the client comparison</li>
+  </ul>
+  <p>Line links are relative to this file's place in the repository, so open it from a checkout of the branch (GitHub shows HTML files as source). Since this pass ran, the report and the manual check were corrected for the 10.1.2 differences it found, and line links into them were moved to match.</p>
+  <p>Companions: <a href="workspace-diagnostics-findings.md">workspace-diagnostics-findings.md</a> (the same findings as plain markdown) and <a href="workspace-diagnostics-report.md">workspace-diagnostics-report.md</a> (the maintainer report).</p>
+</footer>
+
+</div>
+</body>
+</html>
