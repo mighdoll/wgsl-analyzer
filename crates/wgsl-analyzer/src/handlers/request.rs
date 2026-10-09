@@ -11,17 +11,18 @@ use lsp_types::{
     CompletionList, CompletionParams, CompletionResponse, Contents, Definition, DefinitionParams,
     DefinitionResponse, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity,
     DiagnosticTag, DocumentDiagnosticParams, DocumentDiagnosticReport, DocumentFormattingParams,
-    FoldingRange, FoldingRangeParams, FullDocumentDiagnosticReport, Hover, InlayHint,
-    InlayHintParams, MarkupContent, MarkupKind, Range, RelatedFullDocumentDiagnosticReport,
-    SignatureHelp, SignatureHelpParams, TextDocumentContentParams, TextDocumentContentResult,
-    TextDocumentIdentifier, TextEdit,
+    FoldingRange, FoldingRangeParams, Hover, InlayHint, InlayHintParams, MarkupContent, MarkupKind,
+    Range, RelatedFullDocumentDiagnosticReport, SignatureHelp, SignatureHelpParams,
+    TextDocumentContentParams, TextDocumentContentResult, TextDocumentIdentifier, TextEdit,
 };
 use stdx::format_to;
 use vfs::{AbsPath, FileId};
 
 use crate::{
     Result,
-    diagnostics::{convert_diagnostic, convert_related_information},
+    diagnostics::{
+        convert_diagnostic, convert_related_information, result_id::document_diagnostic_report,
+    },
     global_state::GlobalStateSnapshot,
     lsp::{
         self,
@@ -353,18 +354,16 @@ pub(crate) fn view_syntax_tree(
     Ok(string)
 }
 
-// This is the “empty” fallback if the VFS lookup fails.
-// It returns an “Unchanged” report with the same `previousResultId` the client sent.
+/// The `textDocument/diagnostic` report for a file the server does not check:
+/// the VFS is still loading, the file is excluded, its text is not in the
+/// database (see [`GlobalStateSnapshot::has_text`]), or diagnostics are
+/// disabled for its source root.
+///
+/// It is a *full* report with no items, so the client clears any diagnostics it
+/// still holds for the file. It carries no result id, so the client sends no
+/// `previousResultId` on its next pull and gets a full report then.
 pub(crate) fn empty_diagnostic_report() -> DocumentDiagnosticReport {
-    DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(
-        RelatedFullDocumentDiagnosticReport {
-            related_documents: None,
-            full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                result_id: Some("wgsl-analyzer".to_owned()),
-                items: vec![],
-            },
-        },
-    )
+    RelatedFullDocumentDiagnosticReport::default().into()
 }
 
 pub(crate) fn handle_document_diagnostics(
@@ -385,22 +384,8 @@ pub(crate) fn handle_document_diagnostics(
     }
 
     let items = publish_diagnostics(&snap, &config, file_id)?;
-
-    Ok(
-        DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(
-            RelatedFullDocumentDiagnosticReport {
-                related_documents: None,
-                full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                    result_id: Some(
-                        parameters
-                            .previous_result_id
-                            .unwrap_or_else(|| "wgsl-analyzer".to_owned()),
-                    ),
-                    items,
-                },
-            },
-        ),
-    )
+    let previous_result_id = parameters.previous_result_id.as_deref();
+    Ok(document_diagnostic_report(items, previous_result_id))
 }
 
 pub(crate) fn handle_inlay_hints(

@@ -1,6 +1,7 @@
 //! Book keeping for keeping diagnostics easily in sync with the client.
 
 // pub(crate) mod to_proto;
+pub(crate) mod result_id;
 
 use std::{mem, ops};
 
