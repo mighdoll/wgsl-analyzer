@@ -10,6 +10,7 @@ use test_utils::project_root;
 use vfs::{AbsPath, AbsPathBuf};
 
 mod bevy;
+mod pull_diagnostics;
 
 use crate::{
     discover::{LoadPackageMessage, LoadPackageTask},

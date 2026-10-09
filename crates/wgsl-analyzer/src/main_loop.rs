@@ -88,7 +88,7 @@ pub fn main_loop(
     GlobalState::new(connection.sender, config).run(connection.receiver)
 }
 
-enum Event {
+pub(crate) enum Event {
     Lsp(lsp_server::Message),
     Task(Task),
     QueuedTask(DeferredTask),
@@ -392,7 +392,7 @@ impl GlobalState {
 
     #[expect(clippy::cognitive_complexity, reason = "deprecated lint")]
     #[expect(clippy::too_many_lines, reason = "TODO")]
-    fn handle_event(
+    pub(crate) fn handle_event(
         &mut self,
         event: Event,
     ) {
